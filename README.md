@@ -13,7 +13,7 @@
     <img src="rsc/logo.jpg" alt="Logo" height="350">
   </a> -->
 
-<h3 align="center">Language Model</h3>
+<h3 align="center">Small Language Model</h3>
 
   <p align="center">
     This project is the implementation of a little GPT model trained on different datasets
