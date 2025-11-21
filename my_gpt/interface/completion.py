@@ -2,7 +2,7 @@
 import os
 from openai import OpenAI
 import load_dotenv
-from my_gpt.app.config import ConfigChat
+from my_gpt.interface.config import ConfigChat
 from typing import List, Dict
 
 load_dotenv.load_dotenv()

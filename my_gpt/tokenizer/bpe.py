@@ -1,93 +1,84 @@
-from typing import List
-from pathlib import Path
-import torch
-from my_gpt.utils.settings import Settings
+from collections import Counter
 from my_gpt.tokenizer.pretokenizer import SimplePreTokenizer
-import pickle
 
-simple_corpus = [
-    "Hello world!",
-    "I am a simple string, here to help my creator to debug.",
-    "Do you know that it will not be an optimized version?",
-    "Why do you take so much pain for something that already works well?"
-    "I love pain and I love to debug"
-]
+from typing import Dict, Tuple, Union, Generator
+from pathlib import Path
+from tqdm import tqdm
 
-class ByteLevelBPE:
+
+def pretokenize_stream(corpus_iter: Generator[str, None, None], pretok) -> Generator[list[bytes], None, None]:
+    for line in corpus_iter:
+        tokens = pretok._split(line, drop_special_tokens=True)
+        for t in tokens:
+            yield t.encode("utf-8")
+
+
+def bpe(
+        corpus_iter_fn,      
+        corpus_path: Union[str, Path],
+        config
+    ) -> Tuple[Dict[bytes, bytes], Dict[bytes, int]]:
     """
-    Simple implementation of the Byte-level BPE algorithm in Python 3.10.11
-
-    Args:
-        - vocab_size (int): Size of the vocabulary set at the end of the training
-
+    Byte-Level BPE training implementation. Not fast.
     """
-    def __init__(
-            self, 
-            config: Settings = Settings(),
-        ):
-        self.vocab_size = config.vocab_size
-        self.token_split_pattern = config.token_split_pattern
-        self.special_tokens = config.special_tokens
-        self.forced_tokens = config.forced_tokens
-        self.dir = config.tokenizer_dir
-        self.pretokenizer = SimplePreTokenizer(config)
 
-        self.corpus = []
-        self.token_id = {}
-        
-    @classmethod
-    def from_directory(cls, config: Settings):
-        tokenizer = cls(config)
-        with open(config.tokenizer_dir / "bpe_tokenizer.pkl", "rb") as f:
-            tokenizer.token_id = pickle.load(f)
-        return tokenizer
+    pretknzr = SimplePreTokenizer(config)
 
-    def add_corpus(self, corpus: str):
-        self.corpus.append(corpus.encode('utf-8'))
+    vocab = Counter()
+    pair_counts = Counter()
 
-    def make_vocab(self):
-        tokens = self.pretokenizer.batch_split(self.corpus)
+    print("First streaming pass (initial vocab + pair counts)")
 
-        # All Unicode code points from 0 to 0x10FFFF (1,114,111 characters)
-        # Note: This creates a very large set and may consume significant memory
-        # All valid UTF-8 byte values (0-255)
-        vocab = {}
+    for token_bytes in tqdm(pretokenize_stream(corpus_iter_fn(corpus_path), pretknzr), desc="Initial pass"):
+        symbols = [bytes([b]) for b in token_bytes]
 
-        freqs = {}
-        for token in tokens:
-            # Convert to bytes to handle unicode characters
-            for tok in token.split():
-                freqs[tok] = freqs.get(tok, 0) + 1
-        freqs = sorted(freqs.items(), key=lambda x: x[1], reverse=True)
-        for token, freq in freqs:
-            if len(vocab) >= self.vocab_size:
-                break
-            vocab[token] = freq
-        while len(vocab) < self.vocab_size:
-            pass
+        vocab.update(symbols)
+        pair_counts.update(zip(symbols, symbols[1:]))
 
+    initial_vocab_size = len(vocab)
+    nb_merges = config.vocab_size - initial_vocab_size
 
-    def encode(
-            self, 
-            x: List[str] | List[List[str]],
-            output_type: str = "to_tensor"
-        ) -> torch.Tensor:
-        if isinstance(x[0], List[str]):
-            return self.encode_batch(x)
-        # Simple and batch encoding
-        pass
-    
-    def encode_batch(self, x: List[List[str]]) -> torch.Tensor:
-        pass
+    print(f"Initial vocab symbols: {initial_vocab_size}")
+    print(f"Will perform ~{nb_merges} merges")
 
-    def decode(self, x: torch.Tensor) -> List[str] | List[List[str]]:
-        if len(x.shape) == 3:
-            return self.decode_batch(x)
-        # Simple and Batch decoding
-        pass
+    merges: Dict[bytes, bytes] = {}
 
-    def decode_batch(self, x: torch.Tensor) -> List[List[str]]:
-        pass
+    for merge_rank in tqdm(range(nb_merges), desc="BPE Merges"):
+        if not pair_counts:
+            break
 
-    def save_tokenizer(self):
-        pass
+        (A, B), _ = pair_counts.most_common(1)[0]
+        merged_symbol = A + B
+        merges[merged_symbol] = merged_symbol 
+        vocab[merged_symbol] = 1
+        new_pair_counts = Counter()
+
+        for token_bytes in pretokenize_stream(corpus_iter_fn(corpus_path), pretknzr):
+            A_len = len(A)
+            B_len = len(B)
+
+            syms = []
+            i = 0
+            L = len(token_bytes)
+
+            while i < L:
+                if i + A_len + B_len <= L and token_bytes[i:i+A_len] == A and token_bytes[i+A_len:i+A_len+B_len] == B:
+                    syms.append(merged_symbol)
+                    i += A_len + B_len
+                else:
+                    syms.append(bytes(token_bytes[i:i+1]))
+                    i += 1
+
+            new_pair_counts.update(zip(syms, syms[1:]))
+
+        pair_counts = new_pair_counts
+
+    vocab_list = sorted(vocab.keys()) 
+    vocab_dict = {sym: i for i, sym in enumerate(vocab_list)}
+
+    offset = len(vocab_dict)
+    for i, special in enumerate(config.special_tokens.list()):
+        vocab_dict[special.encode("utf-8")] = offset + i
+
+    print(f"Final vocab size: {len(vocab_dict)}")
+    return merges, vocab_dict

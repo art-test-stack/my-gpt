@@ -1,7 +1,7 @@
 import os
 import random
 import shutil
-from typing import Iterator, Tuple
+from typing import Iterator, Tuple, Iterable, Dict, Union, Callable
 
 from datasets import load_dataset, Dataset, get_dataset_split_names, load_from_disk
 from transformers import AutoTokenizer
@@ -10,6 +10,69 @@ from torch.utils.data import DataLoader as TorchDataLoader
 from my_gpt.utils.settings import Settings
 
 
+def iter_parquet_batches(split, start: int = 0, step: int = 1) -> Iterator:
+    assert split in ["train", "validation", "test"], "Split must be one of 'train', 'validation', or 'test'."
+
+
+def load_datasets(
+        sources: Iterable[Dict[str, Union[str, float, Callable]]], # { "path": str, "subset": str (optional), "weight": float (optional), "hook": Callable (optional) } 
+        cache_dir: str = "./.data",
+        split: str = "train",
+        *args, **kwargs
+    ) -> Dict[str, Iterable]:
+    ds = { 
+        ds["path"]: ds.get("hook", lambda x: x)(
+            load_dataset(
+                ds["path"], 
+                name=ds.get("name", None),
+                split=split,
+                streaming=True, 
+                cache_dir=cache_dir, 
+                *args, **kwargs
+            )
+        ) for ds in sources
+    }
+    return ds
+
+def weighted_sample_generator(streams, prng):
+    """
+    streams: list of (iterable, weight)
+    yields items from one of the streams according to weights.
+    Designed to keep reading from selected stream until exhausted (streams are long)
+    For streaming HF datasets these are effectively infinite for training; we just sample.
+    """
+    # convert weights to cumulative thresholds
+    total = sum(w for _, w in streams)
+    cum = []
+    acc = 0.0
+    for _, w in streams:
+        acc += w / total
+        cum.append(acc)
+
+    # create iterators
+    iterators = [iter(s) for s, _ in streams]
+    while True:
+        p = prng.random()
+        # pick which stream index
+        idx = 0
+        while p > cum[idx]:
+            idx += 1
+        try:
+            yield next(iterators[idx])
+        except StopIteration:
+            # If a stream ends, remove it from selection.
+            # For HF streaming this is unlikely; but handle gracefully.
+            iterators.pop(idx)
+            streams.pop(idx)
+            cum = []
+            total = sum(w for _, w in streams) if streams else 0
+            acc = 0.0
+            for _, w in streams:
+                acc += w / total
+                cum.append(acc)
+            if not streams:
+                break
+    
 class DataLoader:
     """
     Streaming shard-based DataLoader for large-scale text pretraining.
@@ -114,4 +177,3 @@ class DataLoader:
             print(f"🧹 Cleaning up shard {shard_id}...")
             shutil.rmtree(shard_path, ignore_errors=True)
             del ds, dataloader
-

@@ -1,7 +1,7 @@
 import gradio as gr
 
-from my_gpt.app.config import ConfigChat
-from my_gpt.app.completion import ModelCompletion
+from my_gpt.interface.config import ConfigChat
+from my_gpt.interface.completion import ModelCompletion
 import time, os
 
 # TODO: HAVE TO BE CLEANED UP LATER (l7-18)
@@ -181,12 +181,6 @@ def chatapp_box(model_config: ConfigChat):
         model = ModelCompletion(cfg)
 
         for chunk in model.predict(user_message, messages_for_model):
-            print("Received chunk from model:", chunk)
-            print("Current chat history:", chat_history)
-            # if chunk.get("finish_reason") and not response_added_to_history:
-            #     chat_history.append(response)
-            #     response_added_to_history = True
-
             if chunk.get("finish_reason"):
                 if not reasoning_response["metadata"]["status"] == "done":
                     reasoning_response["metadata"]["status"] = "done"
@@ -194,8 +188,7 @@ def chatapp_box(model_config: ConfigChat):
                 response["content"] = chunk["content"]
 
             elif show_reasoning and chunk.get("reasoning"):
-                reasoning_response["content"] = chunk["reasoning"] # _condense_reasoning(chunk["reasoning"])
-                # chat_history[-2]["content"] = response["content"]
+                reasoning_response["content"] = chunk["reasoning"]
             
             yield "", msg_itc, chat_history, chat_history
 

@@ -16,7 +16,7 @@
 <h3 align="center">Small Language Model</h3>
 
   <p align="center">
-    This project is the implementation of a little GPT model trained on different datasets. It also includes an interface to chat with the model, and with models from 🤗 API, locally or remotly.
+    This project is the implementation of a small GPT model trained on different datasets. It also includes an interface to chat with the model, and with models from 🤗 API, locally or remotly.
     <br />
     <a href="https://github.com/art-test-stack/my-gpt"><strong>Explore the docs »</strong></a>
     <br />

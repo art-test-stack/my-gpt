@@ -17,14 +17,13 @@ class SpecialTokens(BaseModel):
     end_of_user: str = "<|end-of-user|>"
     
     start_of_answer: str = "<|start-of-answer|>"
-
-    start_of_answer: str = "<|startofanswer|>"
+    end_of_answer: str = "<|end-of-answer|>"
     
     def list(self) -> List[str]:
         """
         Returns a list of all special tokens.
         """
-        return list(self.__dict__.values())
+        return [v for v in self.__dict__.values() if v is not None]
     
     def dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items() if v is not None}

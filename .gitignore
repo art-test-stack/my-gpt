@@ -1,6 +1,10 @@
 *.ipynb
 .env
-
+*.lock
+.vscode
+.my_gpt/
+.data/
+.old/
 jobs/
 logs/
 /data/*

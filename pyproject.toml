@@ -1,7 +1,7 @@
 [project]
 name = "my-gpt"
 version = "0.1.0"
-description = "Add your description here"
+description = "This project is the implementation of a little GPT model trained on different datasets. It also includes an interface to chat with the model, and with models from 🤗 API, locally or remotly."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
