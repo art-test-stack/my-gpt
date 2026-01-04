@@ -96,12 +96,12 @@ In this section, you will find instructions to run the chat interface with diffe
 
 Under development environment (`ENV='development'` in `.env`), you can run the chat interface with auto-reloading, use the following command:
 ```sh
-uv run gradio my_gpt/scripts/chat_app.py --demo-name=app
+uv run gradio scripts/chat_app.py --demo-name=app
 ```
 
 Otherwise, if you don't want auto-reloading, use:
 ```sh
-uv run python -m my_gpt.scripts.chat_app
+uv run python -m scripts.chat_app
 ```
 
 Then, open your browser and go to [`http://127.0.0.1:7860/`](http://127.0.0.1:7860/). It is quite straightforward to use. You can select different models (local or remote), choose some hyperparameters for inference, and chat with the model.

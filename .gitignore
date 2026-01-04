@@ -1,23 +1,15 @@
 *.ipynb
-.env
 *.lock
+.env
 .vscode
-.my_gpt/
-.data/
-.old/
-jobs/
-logs/
-/data/*
-!/data/README.md
-!/data/drive
-/output/*
-!/output/README.md
 *./DS_Store
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
 archive/
+.*/
+!/.github/
 
 # C extensions
 *.so
