@@ -9,7 +9,7 @@ import pickle
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import warnings
 
-from my_gpt.utils.default import (
+from gpt_lib.utils.default import (
     DEVICE,
     MODELS_FOLDER, 
     VOCAB_SIZE, 
@@ -29,7 +29,7 @@ from my_gpt.utils.default import (
     PAT_STR_GPT2,
     PAT_STR_GPT4
 )
-from my_gpt.utils.special_tokens import SpecialTokens
+from gpt_lib.utils.special_tokens import SpecialTokens
 
 def get_default_device() -> torch.device:
     if torch.cuda.is_available():
@@ -81,13 +81,39 @@ class TransformerConfig(BaseModel):
     n_layers: int = NUM_LAYERS
     d_head: int = DIM_HEAD  # dim_model // num_heads
     dropout: float = DROPOUT
-    norm_before_attention: bool = True
+    norm_before_attn: bool = True
+    enable_gqa: bool = False
     
     positional_encoding: Literal["positional", "rope"] = "rope" # Options: "positional", "rope"
 
-    attn_type: Literal["sdpa", "flash_attention"] = "sdpa"  # Options: "sdpa", "flash_attention"
-
+    attn_type: Literal["sdpa", "flash", "torch"] = "sdpa"  # Options: "sdpa", "flash", "torch"
+    
     pad_id: int = -100
+
+    nb_experts: int = 16  # Only used if tf_type is "moe"
+    expert_capacity_factor: float = 1.0  # Only used if tf_type is "moe"
+    
+    def model_post_init(self, context: Any) -> None:
+        if self.d_model % self.n_heads != 0:
+            raise ValueError(f"d_model ({self.d_model}) must be divisible by n_heads ({self.n_heads})")
+        if self.d_head != self.d_model // self.n_heads:
+            warnings.warn(f"d_head ({self.d_head}) is not equal to d_model/n_heads ({self.d_model // self.n_heads}). This may lead to unexpected behavior in attention mechanisms.")
+        if not self.norm_before_attn:
+            warnings.warn("Using post-attention normalization (norm_before_attn=False) may lead to training instability.")
+        if self.attn_type == "flash":
+            try:
+                import flash_attn
+            except ImportError:
+                warnings.warn("FlashAttention is not installed. Falling back to standard attention.")
+                self.attn_type = "sdpa"
+
+class DenseTransformerConfig(TransformerConfig):
+    tf_type: Literal["dense"] = "dense"
+
+class MoETransformerConfig(TransformerConfig):
+    tf_type: Literal["moe"] = "moe"
+    nb_experts: int = 16
+    expert_capacity_factor: float = 1.0
 
 class ObjectiveConfig(BaseModel):
     objective_fn: Literal["cross_entropy", "kl_divergence"] = "cross_entropy"
@@ -180,8 +206,18 @@ class GPTConfig(BaseModel):
             return config
         else:
             raise FileNotFoundError(f"No configuration file found for model {model_name} in {model_dir}")
+        
+    @classmethod
+    def from_yaml(cls, path: str | Path) -> "GPTConfig":
+        import yaml
+        if isinstance(path, str):
+            path = Path(path)
+        if not path.exists():
+            raise FileNotFoundError(f"No such file: {path}")
+        with open(path, "r", encoding="utf-8") as f:
+            config_dict = yaml.safe_load(f)
+        return cls.model_validate(config_dict)
     
-
 class TransformerOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

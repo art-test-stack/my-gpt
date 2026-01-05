@@ -1,5 +1,5 @@
 import pytest
-from my_gpt.model.layers import (
+from gpt_lib.model.layers import (
     apply_rope,
     precompute_rope, 
     apply_rms_norm
@@ -9,7 +9,7 @@ import torch.nn.functional as F
 import time
 
 
-@pytest.mark.slow
+@pytest.mark.fast
 def test_rms_norm():
     x = torch.rand(4, 16, 32) # B, S, E
     print(x.shape)
@@ -30,7 +30,7 @@ class TestRoPE:
     d_head = 8
     n_head = 4
 
-    @pytest.mark.slow
+    @pytest.mark.fast
     def test_precompute_rope(self):
         d_head = self.d_head
         seq_len = self.seq_len
@@ -41,7 +41,7 @@ class TestRoPE:
         rope_cache = precompute_rope(seq_len, d_head, device='cpu')
         assert rope_cache.shape == (seq_len, d_head // 2, 2), f"Unexpected rope_cache shape: {rope_cache.shape}"
 
-    @pytest.mark.slow
+    @pytest.mark.fast
     def test_rope(self):
         _bs = self._bs
         n_head = self.n_head

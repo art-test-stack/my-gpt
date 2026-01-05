@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from my_gpt.utils.default import CACHE_DIR
+from gpt_lib.utils.default import CACHE_DIR
 
 class BaseConfig(BaseModel):
     data_dir: str  = CACHE_DIR / ".data"

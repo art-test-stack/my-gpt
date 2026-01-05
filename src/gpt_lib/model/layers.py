@@ -1,10 +1,11 @@
-from my_gpt.utils.schemas import TransformerConfig
-from my_gpt.utils.default import DEVICE, DEVICE_NAME, MAX_CONTEXT
+from gpt_lib.utils.schemas import TransformerConfig
+from gpt_lib.utils.default import DEVICE, DEVICE_NAME, MAX_CONTEXT
 import math
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 import warnings
 
@@ -74,14 +75,24 @@ def scaled_dot_product_attention(
         dropout_p: float = 0.0,
         is_causal: bool = False, 
         scale: float | None = None, 
-        enable_gqa: bool = False
+        enable_gqa: bool = False,
+        device: torch.device | str | None = None
     ) -> torch.Tensor:
+    if device is None:
+        device = query.device
+    if isinstance(device, str):
+        device = torch.device(device)
+    assert query.dim() == 4 and key.dim() == 4 and value.dim() == 4, "Query, Key and Value must be 4D tensors."
+    assert query.size(-1) == key.size(-1) == value.size(-1), "Last dimension of Query, Key and Value must be the same"
+    assert query.device == key.device == value.device, "Query, Key and Value must be on the same device"
+    assert query.device == device, "Query device and specified device must be the same"
+
     L, S = query.size(-2), key.size(-2)
     scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
-    attn_bias = torch.zeros(L, S, dtype=query.dtype, device=query.device)
+    attn_bias = torch.zeros(L, S, dtype=query.dtype, device=device)
     if is_causal:
-        assert attn_mask is None
-        temp_mask = torch.ones(L, S, dtype=torch.bool).tril(diagonal=0)
+        assert attn_mask is not None, "'attn_mask' cannot be None when 'is_causal' is True."
+        temp_mask = torch.ones(L, S, dtype=torch.bool).tril(diagonal=0).to(device=device)
         attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
 
     if attn_mask is not None:
@@ -96,8 +107,8 @@ def scaled_dot_product_attention(
 
     attn_weight = query @ key.transpose(-2, -1) * scale_factor
     attn_weight += attn_bias
-    attn_weight = torch.softmax(attn_weight, dim=-1)
-    attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
+    attn_weight = F.softmax(attn_weight, dim=-1)
+    attn_weight = F.dropout(attn_weight, dropout_p, train=True)
     return attn_weight @ value
 
 class Module(nn.Module):
@@ -130,6 +141,12 @@ class Module(nn.Module):
         '''Clip the module gradients'''
         nn.utils.clip_grad_norm_(self.parameters(), max_norm)
 
+    # def init_weights(self) -> None:
+    #     '''Initialize the module weights'''
+    #     for module in self.modules():
+    #         if hasattr(module, 'init_weights'):
+    #             module.init_weights()
+
 class Embedding(Module):
     '''Embedding layer'''
     def __init__(self, config: TransformerConfig = TransformerConfig(), dtype=torch.float32, device=torch.device(DEVICE)) -> None:
@@ -157,54 +174,51 @@ class Embedding(Module):
 class Linear(nn.Linear, Module):
     '''Linear layer'''
     def __init__(self, in_features: int, out_features: int, bias: bool = False, device: torch.device = DEVICE, dtype=None) -> None:
-        super().__init__(in_features=in_features, out_features=out_features, bias=bias, device=device)
+        super().__init__(in_features=in_features, out_features=out_features, bias=bias, device=device, dtype=dtype)
         # TODO: Reparametrize weights and bias here
 
-
-    
-class AttentionBlock(Module):
-    '''Scaled Dot-Product Attention'''
-
-    def __init__(self, dropout: float =0.1):
-        super().__init__()
-        self.dropout = nn.Dropout(dropout)
-        self.softmax = nn.Softmax(dim=-1)
-
-    def forward(
-            self, 
-            q: torch.Tensor, 
-            k: torch.Tensor, 
-            v: torch.Tensor, 
-            scale: int, 
-            mask=None, 
-        ):
-        attention = torch.matmul(q / math.sqrt(scale), k.transpose(2, 3))
-
-        if mask is not None:
-            attention = attention.masked_fill(mask, torch.tensor(float("-inf")))
-
-        attention = self.dropout(self.softmax(attention))
-        output = torch.matmul(attention, v)
-        # TODO: add a way to get attention mechanism weights representation
-        return output, attention
+    def init_weights(self, std: float = 0.01, method: str ="uniform") -> None:
+        assert method in ["uniform", "normal", "zero"], "Method must be 'uniform', 'normal' or 'zero'"
+        if method == "uniform":
+            nn.init.uniform_(self.weight, -std, std)
+        elif method == "normal":
+            nn.init.normal_(self.weight, 0, std)
+        elif method == "zero":
+            nn.init.zeros_(self.weight)
+        if self.bias is not None:
+            nn.init.zeros_(self.bias)
     
 
-class MultiHeadAttention(Module):
-    '''Multi-Head Attention module'''
-    def __init__(self, dim_model: int, n_heads: int, d_head: int) -> None:
+class CausalSelfAttention(Module):
+    def __init__(self, dim_model: int, n_heads: int, d_head: int, norm_before_attn: bool, enable_gqa: bool, layer_idx: int = 0) -> None:
         super().__init__()
         assert dim_model == d_head * n_heads, f"Dimensions are not correct. dim_model must be equal to d_head * n_heads. Got dim_model={dim_model}, d_head={d_head}, n_heads={n_heads}"
+        self.layer_idx = layer_idx
         self.n_heads = n_heads
         self.d_head = d_head
+        self.norm_before_attn = norm_before_attn
+
+        if enable_gqa:
+            assert n_heads % 2 == 0, "Number of heads must be even for GQA."
+            self.n_heads = n_heads // 2
+            d_k = d_head
+        else:
+            d_k = d_head * n_heads
 
         self.w_q = Linear(dim_model, d_head * n_heads, bias=False) 
         self.w_k = Linear(dim_model, d_head * n_heads, bias=False) 
         self.w_v = Linear(dim_model, d_head * n_heads, bias=False)
+        self.w_o = Linear(dim_model, dim_model, bias=False)
+    
+    def init_weights(self) -> None:
+        dim_model = self.n_heads * self.d_head
+        std = math.sqrt(3.0 / dim_model)
+        self.w_q.init_weights(std)
+        self.w_k.init_weights(std)
+        self.w_v.init_weights(std)
+        self.w_o.init_weights(methods="zero")
 
-        self.attn = AttentionBlock()
-        self.w_o = Linear(d_head * n_heads, dim_model, bias=False)
-
-    def forward(self, x: torch.Tensor, mask=None):
+    def forward(self, x: torch.Tensor, rope_cache=None, mask=None, kv_cache=None):
         n_heads = self.n_heads
         d_head = self.d_head
 
@@ -215,39 +229,30 @@ class MultiHeadAttention(Module):
         k = self.w_k(x)
         v = self.w_v(x)
 
-        q = q.view(batch_size, len_x, n_heads, d_head).transpose(1,2)
-        k = k.view(batch_size, len_x, n_heads, d_head).transpose(1,2)
-        v = v.view(batch_size, len_x, n_heads, d_head).transpose(1,2)
+        q = q.view(batch_size, len_x, n_heads, d_head)
+        k = k.view(batch_size, len_x, n_heads, d_head)
+        v = v.view(batch_size, len_x, n_heads, d_head)
+
+        if rope_cache is not None:
+            q = apply_rope(q, rope_cache)
+            k = apply_rope(k, rope_cache)
+        if self.norm_before_attn:
+            q = apply_rms_norm(q, eps=1e-8, torch_impl=True)
+            k = apply_rms_norm(k, eps=1e-8, torch_impl=True)
+        
+        q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)  # b X n_heads X l X d_head
+
+        if kv_cache is not None:
+            k, v = kv_cache.insert(k, v)
 
         if mask is not None:
             mask = mask.unsqueeze(1)  
         
-        output, attention = self.attn(q, k, v, scale=d_head, mask=mask)
+        output, attention = scaled_dot_product_attention(q, k, v, scale=d_head, attn_mask=mask, is_causal=True)
     
         output = output.transpose(1, 2).contiguous().view(batch_size, len_x, -1)
         output = self.w_o(output)
         return output, attention
-
-
-class GroupQueryAttention(Module):
-    '''Group Query Attention module'''
-    def __init__(self, dim_model: int, n_heads: int, d_head: int, n_groups: int) -> None:
-        super().__init__()
-        assert dim_model == d_head * n_heads, "Dimensions are not correct."
-        self.n_heads = n_heads
-        self.d_head = d_head
-        self.n_groups = n_groups
-
-        self.w_q = Linear(dim_model, d_head * n_heads, bias=False) 
-        self.w_k = Linear(dim_model, d_head * n_heads, bias=False) 
-        self.w_v = Linear(dim_model, d_head * n_heads, bias=False)
-
-        self.attn = AttentionBlock()
-        self.w_o = Linear(d_head * n_heads, dim_model, bias=False)
-
-    def forward(self, x: torch.Tensor, mask=None):
-        # Implementation of Group Query Attention would go here
-        pass
 
     
 class FeedForward(Module):
@@ -255,19 +260,17 @@ class FeedForward(Module):
     def __init__(self, d_in: int, d_latent: int, dropout: float) -> None:
         super().__init__()
         self.w_1 = Linear(d_in, d_latent, dropout)
-        self.activation = nn.ReLU()
         self.w_2 = Linear(d_latent, d_in, dropout)
         self.dropout = nn.Dropout(dropout)
-        self.layer_norm = nn.LayerNorm(d_in, eps=1e-6)
-    
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        h = self.w_2(self.activation(self.w_1(x)))
+        h = self.w_2(F.relu(self.w_1(x)))
 
         if self.training:
             h = self.dropout(h)
             
         h += x
-        output = self.layer_norm(h)
+        output = apply_rms_norm(h)
         return output
     
 
@@ -279,26 +282,34 @@ class DecoderLayer(Module):
             dim_ffn: int, 
             n_heads: int, 
             d_head: int, 
-            dropout: float
+            dropout: float,
+            enable_gqa: bool = False,
+            layer_idx: int = 0,
+            norm_before_attn: bool = True
         ) -> None:
         super().__init__()
-        self.attention = MultiHeadAttention(
-            dim_model=dim_model, n_heads=n_heads, d_head=d_head
+        if not norm_before_attn:
+            warnings.warn("Using 'norm_before_attn=False' is not recommended and may lead to training instability.", UserWarning)
+        self.attention = CausalSelfAttention(
+            dim_model=dim_model, 
+            n_heads=n_heads, 
+            d_head=d_head, 
+            enable_gqa=enable_gqa,
+            layer_idx=layer_idx, 
+            norm_before_attn=norm_before_attn   
         )
         
         self.dropout = nn.Dropout(dropout)
-        self.layer_norm = nn.LayerNorm(dim_model)
         
         self.ffn = FeedForward(d_in=dim_model, d_latent=dim_ffn, dropout=dropout)
 
     def forward(self, x, self_attention_mask=None,):
-        
         h, self_attention = self.attention(x, mask=self_attention_mask)
 
         if self.training:
             h = self.dropout(h) 
         h += x
-        h = self.layer_norm(h)
+        h = apply_rms_norm(h)
         output = h + self.ffn(h)
 
         return output, self_attention, None
@@ -318,10 +329,9 @@ class MixtureOfExpertsLayer(Module):
             for _ in range(n_experts)
         ])
         self.router = Linear(dim_model, n_experts, bias=False)
-        self.softmax = nn.Softmax(dim=-1)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        router_scores = self.softmax(self.router(x))  
+        router_scores = F.softmax(self.router(x), dim=-1)  
         expert_outputs = torch.stack([expert(x) for expert in self.experts], dim=-1)  
         router_scores = router_scores.unsqueeze(2)  
         output = torch.sum(expert_outputs * router_scores, dim=-1)  

@@ -1,5 +1,5 @@
 [project]
-name = "my-gpt"
+name = "gpt-lib"
 version = "0.1.0"
 description = "This project is the implementation of a small library to manage LLM training and inference from-scratch. It also includes an interface to chat with the model, and with models from 🤗 API, locally or remotly."
 readme = "README.md"
@@ -96,6 +96,11 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest",
+]
+
+[project.optional-dependencies]
+cuda = [
+    "flash-attn>=2.6.0; platform_system == 'Linux'",
 ]
 
 [tool.setuptools]

@@ -1,5 +1,5 @@
 from collections import Counter
-from my_gpt.tokenizer.pretokenizer import SimplePreTokenizer
+from gpt_lib.tokenizer.pretokenizer import SimplePreTokenizer
 
 from typing import Dict, Tuple, Union, Generator
 from pathlib import Path

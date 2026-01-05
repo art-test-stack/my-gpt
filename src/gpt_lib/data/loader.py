@@ -7,7 +7,7 @@ from datasets import load_dataset, Dataset, get_dataset_split_names
 from transformers import AutoTokenizer
 from torch.utils.data import DataLoader as TorchDataLoader
 
-from my_gpt.utils.default import Settings
+from gpt_lib.utils.default import Settings
 
 def load_datasets(
         sources: Iterable[Dict[str, Union[str, float, Callable]]], # { "path": str, "subset": str (optional), "weight": float (optional), "hook": Callable (optional) } 

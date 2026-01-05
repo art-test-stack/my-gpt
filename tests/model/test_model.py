@@ -1,7 +1,7 @@
 import pytest
 import torch
-from my_gpt.model.model import GPTModel
-from my_gpt.utils.schemas import (
+from gpt_lib.model.model import GPTModel
+from gpt_lib.utils.schemas import (
     GPTConfig, 
     ObjectiveConfig, 
     TokenizerConfig, 
@@ -47,7 +47,7 @@ class TestGPTModel:
 
     # TESTS
 
-    @pytest.mark.slow
+    @pytest.mark.fast
     def test_model_loading_saving(self):
         self.config.to_file(mode="pickle")
 
@@ -68,7 +68,7 @@ class TestGPTModel:
         assert all(torch.equal(loaded_model.model.state_dict()[k], model.model.state_dict()[k]) for k in model.model.state_dict().keys()), "Loaded model state dict values do not match the original"
 
 
-    @pytest.mark.slow
+    @pytest.mark.fast
     def test_model_generation(self):
         config = self.config
 

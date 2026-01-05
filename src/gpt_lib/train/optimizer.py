@@ -1,4 +1,4 @@
-from my_gpt.utils.default import *
+from gpt_lib.utils.default import *
 
 import torch
 from torch import Tensor, optim

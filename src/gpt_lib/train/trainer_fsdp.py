@@ -1,14 +1,14 @@
-from my_gpt.model.trainer import Trainer
-from my_gpt.model.arg import ModelArgs
-from my_gpt.model.model import MichelTransformer
-from my_gpt.train.optimizer import AdamW
+from gpt_lib.model.trainer import Trainer
+from gpt_lib.model.arg import ModelArgs
+from gpt_lib.model.model import MichelTransformer
+from gpt_lib.train.optimizer import AdamW
 
-from my_gpt.data.datasets.dataset import Dataset
-from my_gpt.data.datasets.wikipedia import WikipediaDataset
+from gpt_lib.data.datasets.dataset import Dataset
+from gpt_lib.data.datasets.wikipedia import WikipediaDataset
 # from michelgpt.data.tokenizer.models import HGFBPETokenizer as Tokenizer
-from my_gpt.tokenizer.tok import TikTokenizer as Tokenizer
-from my_gpt.utils import get_logger, rank_log, verify_min_gpu_count
-from my_gpt.utils.default import *
+from gpt_lib.tokenizer.tok import TikTokenizer as Tokenizer
+from gpt_lib.utils import get_logger, rank_log, verify_min_gpu_count
+from gpt_lib.utils.default import *
 
 import sys
 import os

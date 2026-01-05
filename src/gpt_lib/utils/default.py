@@ -1,7 +1,7 @@
 import torch
 import os
 from pathlib import Path
-from my_gpt.utils.special_tokens import SpecialTokens
+from gpt_lib.utils.special_tokens import SpecialTokens
 
 # ----------- PROCESSOR -----------
 
@@ -20,10 +20,10 @@ NUM_THREADS = os.cpu_count() # 16
 IS_TIKTOKEN = False # TODO: parse as arg
 
 SPECIAL_TOKENS = SpecialTokens()
-FORCED_TOKENS = ["AI", "Michel", "GPT", "MichelGPT", "michelgpt"]
+FORCED_TOKENS = []
 
-# CACHE_DIR = Path.home() / ".my_gpt"
-CACHE_DIR = Path(".my_gpt")
+# CACHE_DIR = Path.home() / ".gpt_lib"
+CACHE_DIR = Path(".gpt_lib")
 DATA_FOLDER = CACHE_DIR / ".data"
 MIN_DOCUMENT_SIZE = 0
 OUTPUT_FOLDER = CACHE_DIR / ".output"

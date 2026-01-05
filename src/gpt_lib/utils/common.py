@@ -7,11 +7,11 @@ def slugify(text: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in text.replace(" ", "-")).lower()
 
 def get_repo_dir():
-    if os.getenv("MY_GPT_BASE_DIR"):
-        return Path(os.getenv("MY_GPT_BASE_DIR"))
+    if os.getenv("GPT_LIB_BASE_DIR"):
+        return Path(os.getenv("GPT_LIB_BASE_DIR"))
     
     else:
         home_dir = Path.home()
-        cache_dir = home_dir / ".my_gpt"
-        repo_dir = cache_dir / "my-gpt"
+        cache_dir = home_dir / ".gpt_lib"
+        repo_dir = cache_dir / "gpt_lib"
         return repo_dir

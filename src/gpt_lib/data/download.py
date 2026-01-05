@@ -4,8 +4,8 @@ from datasets import load_dataset_builder
 from typing import Tuple
 from pathlib import Path
 
-from my_gpt.utils.default import CACHE_DIR, RANDOM_SEED
-from my_gpt.data.config import DownloadConfig
+from gpt_lib.utils.default import CACHE_DIR, RANDOM_SEED
+from gpt_lib.data.config import DownloadConfig
 
 DATA_PATH = CACHE_DIR / ".data"
 DATA_PATH.mkdir(parents=True, exist_ok=True)

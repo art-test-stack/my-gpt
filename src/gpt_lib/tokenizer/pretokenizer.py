@@ -1,4 +1,4 @@
-from my_gpt.utils.schemas import TokenizerConfig
+from gpt_lib.utils.schemas import TokenizerConfig
 from typing import List
 import regex as re
 

@@ -1,11 +1,11 @@
-from my_gpt.model.model import GPTModel
-from my_gpt.train.optimizer import AdamW
+from gpt_lib.model.model import GPTModel
+from gpt_lib.train.optimizer import AdamW
 
-from my_gpt.data.dataset import Dataset
+from gpt_lib.data.dataset import Dataset
 # from michelgpt.data.tokenizer.models import HGFBPETokenizer as Tokenizer
-from my_gpt.tokenizer.tok import TikTokenizer as Tokenizer
+from gpt_lib.tokenizer.tok import TikTokenizer as Tokenizer
 
-from my_gpt.utils.default import *
+from gpt_lib.utils.default import *
 
 import torch
 from torch import nn, optim

@@ -1,5 +1,5 @@
 from importlib import import_module
-import my_gpt.tokenizer.pretokenizer as sp
+import gpt_lib.tokenizer.pretokenizer as sp
 import rbpe
 
 def _token_generator_from_lines(corpus_iter_fn, corpus_path, config):

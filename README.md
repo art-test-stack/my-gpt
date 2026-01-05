@@ -9,19 +9,19 @@
 <!-- PROJECT LOGO -->
 <br />
 <div align="center">
-  <!-- <a href="https://github.com/art-test-stack/my-gpt">
+  <!-- <a href="https://github.com/art-test-stack/gpt-lib">
     <img src="rsc/logo.jpg" alt="Logo" height="350">
   </a> -->
 
-<h3 align="center">Small Language Model</h3>
+<h3 align="center">Generative Pre-trained Transformer Library</h3>
 
   <p align="center">
-    This project is the implementation of a small GPT model trained on different datasets. It also includes an interface to chat with the model, and with models from 🤗 API, locally or remotly.
+    This project is the implementation of a light-weight library for LLM management and monitoring, from training to inference. It also includes an interface to chat with the model, and with models from 🤗 API, locally or remotly.
     <br />
-    <a href="https://github.com/art-test-stack/my-gpt"><strong>Explore the docs »</strong></a>
+    <a href="https://github.com/art-test-stack/gpt-lib"><strong>Explore the docs »</strong></a>
     <br />
     <br />
-    <a href="https://github.com/art-test-stack/my-gpt/issues/new?labels=enhancement&template=feature-request---.md">Request Feature</a>
+    <a href="https://github.com/art-test-stack/gpt-lib/issues/new?labels=enhancement&template=feature-request---.md">Request Feature</a>
   </p>
 </div>
 
@@ -79,12 +79,17 @@ This project has been developed and tested with Python 3.13. To manage dependenc
 
 1. Clone the repo
    ```sh
-   git clone git@github.com:art-test-stack/my-gpt.git
+   git clone git@github.com:art-test-stack/gpt-lib.git
     ```
 2. Install dependencies
    ```sh
-   uv install
+   uv sync
    ```
+   If running on Linux with CUDA available, you can install the GPU version of PyTorch by running:
+   ```sh
+   uv sync --extra cuda
+  ```
+  [!Note]: Make sure to adjust the CUDA version in `uv.toml` if needed. This extra is only available for Linux systems with compatible NVIDIA GPUs. It permits using `flash_attention` for faster attention computation.
 
 ### Training a model
 
@@ -161,23 +166,23 @@ Distributed under the MIT License. See `LICENSE.txt` for more information.
 
 Arthur Testard - [arthur.testard.pro@gmail.com](mailto:arthur.testard.pro@gmail.com)
 
-Project Link: [https://github.com/art-test-stack/my-gpt](https://github.com/art-test-stack/my-gpt)
+Project Link: [https://github.com/art-test-stack/gpt-lib](https://github.com/art-test-stack/gpt-lib)
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 
 
 <!-- MARKDOWN LINKS & IMAGES -->
-[contributors-shield]: https://img.shields.io/github/contributors/art-test-stack/my-gpt.svg?style=for-the-badge
-[contributors-url]: https://github.com/art-test-stack/my-gpt/graphs/contributors
-[forks-shield]: https://img.shields.io/github/forks/art-test-stack/my-gpt.svg?style=for-the-badge
-[forks-url]: https://github.com/art-test-stack/my-gpt/network/members
-[stars-shield]: https://img.shields.io/github/stars/art-test-stack/my-gpt.svg?style=for-the-badge
-[stars-url]: https://github.com/art-test-stack/my-gpt/stargazers
-[issues-shield]: https://img.shields.io/github/issues/art-test-stack/my-gpt.svg?style=for-the-badge
-[issues-url]: https://github.com/art-test-stack/my-gpt/issues
-[license-shield]: https://img.shields.io/github/license/art-test-stack/my-gpt.svg?style=for-the-badge
-[license-url]: https://github.com/art-test-stack/my-gpt/blob/master/LICENSE.txt
+[contributors-shield]: https://img.shields.io/github/contributors/art-test-stack/gpt-lib.svg?style=for-the-badge
+[contributors-url]: https://github.com/art-test-stack/gpt-lib/graphs/contributors
+[forks-shield]: https://img.shields.io/github/forks/art-test-stack/gpt-lib.svg?style=for-the-badge
+[forks-url]: https://github.com/art-test-stack/gpt-lib/network/members
+[stars-shield]: https://img.shields.io/github/stars/art-test-stack/gpt-lib.svg?style=for-the-badge
+[stars-url]: https://github.com/art-test-stack/gpt-lib/stargazers
+[issues-shield]: https://img.shields.io/github/issues/art-test-stack/gpt-lib.svg?style=for-the-badge
+[issues-url]: https://github.com/art-test-stack/gpt-lib/issues
+[license-shield]: https://img.shields.io/github/license/art-test-stack/gpt-lib.svg?style=for-the-badge
+[license-url]: https://github.com/art-test-stack/gpt-lib/blob/master/LICENSE.txt
 [linkedin-shield]: https://img.shields.io/badge/-LinkedIn-black.svg?style=for-the-badge&logo=linkedin&colorB=555
 [linkedin-url]: https://linkedin.com/in/arthur-testard
 [product-screenshot]: images/screenshot.png

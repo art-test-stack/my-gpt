@@ -1,8 +1,8 @@
 from pathlib import Path
 import random, pickle
-from my_gpt.utils.default import RANDOM_SEED, CACHE_DIR
-from my_gpt.data.loader import load_datasets
-from my_gpt.data.normalizers import clean_codeparrot_example
+from gpt_lib.utils.default import RANDOM_SEED, CACHE_DIR
+from gpt_lib.data.loader import load_datasets
+from gpt_lib.data.normalizers import clean_codeparrot_example
 
 from tqdm import tqdm
 

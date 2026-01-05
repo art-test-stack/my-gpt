@@ -1,7 +1,7 @@
-from my_gpt.utils.schemas import TokenizerConfig, TrainingTokenizerConfig
-from my_gpt.tokenizer.pretokenizer import SimplePreTokenizer
-# from my_gpt.tokenizer.bpe import ByteLevelBPE
-from my_gpt.tokenizer.tok import TikTokenizer
+from gpt_lib.utils.schemas import TokenizerConfig, TrainingTokenizerConfig
+from gpt_lib.tokenizer.pretokenizer import SimplePreTokenizer
+# from gpt_lib.tokenizer.bpe import ByteLevelBPE
+from gpt_lib.tokenizer.tok import TikTokenizer
 # from rustbpe import BPETokenizer as RustByteLevelBPE
 
 from tokenizers import Tokenizer as HFTokenizer
@@ -10,7 +10,7 @@ from typing import Callable, Iterable, List
 import tiktoken
 
 import random
-from my_gpt.utils.special_tokens import SpecialTokens
+from gpt_lib.utils.special_tokens import SpecialTokens
 
 class DummyTokenizer:
     def __init__(self, config: TokenizerConfig):

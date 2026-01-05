@@ -4,7 +4,7 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 
-from my_gpt.utils.schemas import ModelOutput, ObjectiveConfig 
+from gpt_lib.utils.schemas import ModelOutput, ObjectiveConfig 
 
 class Objective(ABC):
     @abstractmethod

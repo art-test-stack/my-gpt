@@ -9,7 +9,7 @@ __pycache__/
 *$py.class
 archive/
 .*/
-!/.github/
+!/*/.github/
 
 # C extensions
 *.so

@@ -1,7 +1,7 @@
 import gradio as gr
 
-from my_gpt.interface.config import ConfigChat
-from my_gpt.interface.completion import ModelCompletion
+from gpt_lib.interface.config import ConfigChat
+from gpt_lib.interface.completion import ModelCompletion
 import time, os
 
 # TODO: HAVE TO BE CLEANED UP LATER (l7-18)

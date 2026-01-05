@@ -1,8 +1,8 @@
-from my_gpt.model.layers import DecoderLayer, Linear, precompute_rope, precompute_positional_encoding
-from my_gpt.model.loss import build_objective
-from my_gpt.model.module import Module
-from my_gpt.tokenizer.tokenizer import build_tokenizer
-from my_gpt.utils.schemas import (
+from gpt_lib.model.layers import DecoderLayer, Linear, precompute_rope, precompute_positional_encoding
+from gpt_lib.model.loss import build_objective
+from gpt_lib.model.module import Module
+from gpt_lib.tokenizer.tokenizer import build_tokenizer
+from gpt_lib.utils.schemas import (
     get_default_device,
     GenerationConfig,
     GPTConfig, 
@@ -11,7 +11,7 @@ from my_gpt.utils.schemas import (
     TransformerConfig, 
     TransformerOutput, 
 )
-from my_gpt.utils.default import MODELS_FOLDER, DEVICE
+from gpt_lib.utils.default import MODELS_FOLDER, DEVICE
 
 from typing import List, Iterator
 
@@ -36,7 +36,6 @@ class Transformer(Module):
         self.padding_idx = args.pad_id
         self.device = device
         self.dtype = dtype
-        # TODO: Will change to customed embedding
         if self.config.positional_encoding == "rope":
             rope_cache = precompute_rope(
                 seq_len=args.max_context,
@@ -54,6 +53,7 @@ class Transformer(Module):
         else:
             raise ValueError(f"Unknown positional encoding: {self.config.positional_encoding}")
 
+        # TODO: Will change to customed embedding
         embedding = nn.Embedding(
             num_embeddings = args.vocab_size, 
             embedding_dim = args.d_model, 
@@ -71,20 +71,17 @@ class Transformer(Module):
                     dim_ffn=args.d_ffn, 
                     n_heads=args.n_heads, 
                     d_head=args.d_head, 
-                    dropout=args.dropout
+                    dropout=args.dropout,
+                    layer_idx=layer_idx,
+                    norm_before_attn=args.norm_before_attn,
+                    enable_gqa=args.enable_gqa,
                 ) 
-                for _ in range(args.n_layers)
+                for layer_idx in range(args.n_layers)
             ])
         ))
         
         self.model_head = Linear(args.d_model, args.vocab_size, bias=False)
 
-        self.init_weights()
-
-    def init_weights(self) -> None:
-        for p in self.parameters():
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
                 
     def forward(
             self, 
@@ -100,7 +97,6 @@ class Transformer(Module):
         assert input_ids.shape[-1] <= self.config.max_context, f"Input sequence length {input_ids.shape[-1]} exceeds max context {self.config.max_context}"
         assert input_ids.dim() == 2, "Input ids should be of shape (batch_size, seq_len)"
         mask = self.get_pad_mask(input_ids)
-
         x = self.layers.emb(input_ids)
 
         if self.config.positional_encoding == "positional_encoding":
@@ -115,7 +111,7 @@ class Transformer(Module):
                 # kv_cache=kv_cache, 
                 # return_attentions=return_attn
             )
-            assert x.nansum() != 0, f"NaN detected in layer {i} output"
+            assert x.nansum() != 0, f"NaN detected in layer {i} output."
             if return_attn:
                 attentions.append(attn)
 
@@ -148,10 +144,10 @@ class GPTModel:
         super().__init__()
         self.config = config
         self.tokenizer = build_tokenizer(config.tokenizer)
+        # TODO: Add support for loading Dense vs MoE vs Hybrid models
         self.model = model
         self.loss_fn = build_objective(config.objective)
         self.model = self.model.to(DEVICE)
-
 
         assert self.model is not None, "Model must be provided"
         assert all(hasattr(self.model, attr) for attr in ["config", "padding_idx", "vocab_size"]), "Model must have config, padding_idx and vocab_size attributes"
@@ -287,6 +283,25 @@ class GPTModel:
             return self.model.nb_parameters()
         except AttributeError:
             return sum([p.numel() for p in self.model.parameters()])
+
+    def init_weights(self) -> None:
+        try:
+            for name, layer in self.model.layers.items():
+                if hasattr(layer, "init_weights"):
+                    layer.init_weights()
+                else:
+                    for p in layer.parameters():
+                        if p.dim() > 1:
+                            nn.init.uniform_(p)
+        except:
+            for p in self.model.parameters():
+                if p.dim() > 1:
+                    nn.init.xavier_uniform_(p)
+    
+    def get_optimzer(self) -> torch.optim.Optimizer:
+        # TODO: return optimizer based on config
+        pass
+        
     
     @classmethod
     def from_pretrained(
@@ -330,7 +345,20 @@ class GPTModel:
         ) -> "GPTModel":
         config.to_file(mode="pickle")
         model = Transformer(args=config.model, device=config.device, dtype=config.dtype)
-        return cls(model=model, config=config)
+        gpt = cls(model=model, config=config)
+        gpt.init_weights()
+        return gpt
+    
+    @classmethod
+    def from_yaml(
+            cls,
+            yaml_path: str | Path,
+        ) -> "GPTModel":
+        config = GPTConfig.from_yaml(yaml_path)
+        model = Transformer(args=config.model, device=config.device, dtype=config.dtype)
+        gpt = cls(model=model, config=config)
+        gpt.init_weights()
+        return gpt
     
     def save_checkpoint(
             self,

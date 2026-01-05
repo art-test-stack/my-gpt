@@ -1,4 +1,4 @@
-from my_gpt.utils.schemas import TokenizerConfig
+from gpt_lib.utils.schemas import TokenizerConfig
 
 from pathlib import Path
 from typing import List

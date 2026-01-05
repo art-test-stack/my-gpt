@@ -1,4 +1,4 @@
-from my_gpt.utils.log import print_banner
+from gpt_lib.utils.log import print_banner
 
 report_template = """
 Model Training Report
