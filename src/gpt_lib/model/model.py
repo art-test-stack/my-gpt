@@ -184,6 +184,14 @@ class GPTModel:
 
     def train(self) -> None:
         self.model.train()
+    
+    def encode_batch(self, texts: List[str], add_special_tokens: bool = True) -> List[List[int]]:
+        # Dummy implementation
+        return self.tokenizer.batch_encode(texts, add_special_tokens=add_special_tokens)
+    
+    def decode_batch(self, token_ids: List[List[int]]) -> List[str]:
+        # Dummy implementation
+        return [self.tokenizer.decode(ids) for ids in token_ids]
 
     def forward(
             self, 

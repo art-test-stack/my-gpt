@@ -89,7 +89,10 @@ This project has been developed and tested with Python 3.13. To manage dependenc
    ```sh
    uv sync --extra cuda
   ```
-  [!Note]: Make sure to adjust the CUDA version in `uv.toml` if needed. This extra is only available for Linux systems with compatible NVIDIA GPUs. It permits using `flash_attention` for faster attention computation.
+
+> [!NOTE]  
+> Make sure to adjust the CUDA version in `uv.toml` if needed. This extra is only available for Linux systems with compatible NVIDIA GPUs. It permits using `flash_attention` for faster attention computation.
+
 
 ### Training a model
 

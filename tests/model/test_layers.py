@@ -2,7 +2,8 @@ import pytest
 from gpt_lib.model.layers import (
     apply_rope,
     precompute_rope, 
-    apply_rms_norm
+    apply_rms_norm,
+    scaled_dot_product_attention
 )
 import torch
 import torch.nn.functional as F
@@ -23,6 +24,53 @@ def test_rms_norm():
     print(f"Custom RMSNorm time: {custom_time:.6f}s, Torch RMSNorm time: {torch_time:.6f}s")
 
     assert torch.allclose(rms_normed_x1, rms_normed_x2), "RMSNorm output does not match expected output"
+
+
+class TestSDPA:
+    B, H, S, E = 4, 4, 16, 8
+    query = torch.rand(B, H, S, E)
+    key = torch.rand(B, H, S, E)
+    value = torch.rand(B, H, S, E)
+
+    @pytest.mark.fast
+    def test_sdpa_not_causal(self):
+        B, H, S, E = self.B, self.H, self.S, self.E
+        query = self.query
+        key = self.key
+        value = self.value
+
+        sdpa, _ = scaled_dot_product_attention(query, key, value)
+
+        # Reference implementation using PyTorch's built-in functions
+        def reference_sdpa(query, key, value):
+                output = F.scaled_dot_product_attention(
+                    query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False
+                )
+                return output
+
+        reference_output = reference_sdpa(query, key, value)
+        self.common_assertions(sdpa, reference_output, (B, H, S, E))
+
+    @pytest.mark.fast
+    def test_sdpa_causal(self):
+        B, H, S, E = self.B, self.H, self.S, self.E
+        query = self.query
+        key = self.key
+        value = self.value
+
+        sdpa, _ = scaled_dot_product_attention(query, key, value, is_causal=True)
+
+        ref_output = F.scaled_dot_product_attention(
+            query, key, value, dropout_p=0.0, is_causal=True
+        )
+
+        self.common_assertions(sdpa, ref_output, (B, H, S, E))
+
+    def common_assertions(self, output: torch.Tensor, ref: torch.Tensor, shape):
+        assert output.shape == shape, f"Unexpected SDPA output shape: {output.shape}. Expected: {shape}. Got: {output.shape}"
+        assert torch.isfinite(output).all(), "SDPA output contains non-finite values."
+        assert torch.allclose(output, ref), "Custom SDPA output does not match reference output."
+
 
 class TestRoPE:
     _bs = 4

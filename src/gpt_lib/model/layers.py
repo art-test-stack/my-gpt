@@ -49,9 +49,9 @@ def apply_rope(x: torch.Tensor, rope_cache: torch.Tensor, pairwise_split: bool =
     batch, n_heads, seq_len, d_head = x.shape
     assert x1.shape == x2.shape == (batch, n_heads, seq_len, d_head // 2), f"Unexpected shapes: x1 {x1.shape}, x2 {x2.shape}"
 
-    x1 = x1 * cos - x2 * sin
-    x2 = - x1 * sin + x2 * cos
-    x = torch.stack([x1, x2], dim=-1).reshape_as(x)
+    _x1 = x1 * cos - x2 * sin
+    _x2 = - x1 * sin + x2 * cos
+    x = torch.stack([_x1, _x2], dim=-1).reshape_as(x)
     # x_rotated = torch.stack([-x2, x1], dim=-1).reshape_as(x)
     # x = x * cos + x_rotated * sin
     return x
@@ -76,6 +76,7 @@ def scaled_dot_product_attention(
         is_causal: bool = False, 
         scale: float | None = None, 
         enable_gqa: bool = False,
+        return_attn_weights: bool = False,
         device: torch.device | str | None = None
     ) -> torch.Tensor:
     if device is None:
@@ -84,36 +85,36 @@ def scaled_dot_product_attention(
         device = torch.device(device)
     assert query.dim() == 4 and key.dim() == 4 and value.dim() == 4, "Query, Key and Value must be 4D tensors."
     assert query.size(-1) == key.size(-1) == value.size(-1), "Last dimension of Query, Key and Value must be the same"
-    assert query.device == key.device == value.device, "Query, Key and Value must be on the same device"
-    assert query.device == device, "Query device and specified device must be the same"
-    print("query shape:", query.shape)
-    print("key shape:", key.shape)
-    print("value shape:", value.shape)
+    assert query.device == key.device == value.device, f"Query, Key and Value must be on the same device. Got Query device: {query.device}, Key device: {key.device}, Value device: {value.device}."
+    assert query.device == device, f"Q, K, V devices and specified device must be the same. Got Query device: {query.device}, Key device: {key.device}, Value device: {value.device}, specified device: {device}."
+
     if attn_mask is not None:
         if attn_mask.dim() == 2:
-            attn_mask = attn_mask.unsqueeze(1).unsqueeze(1)
-        # if attn_mask.dim() == 2:
-        #     attn_mask = ...
-        #     print("unsqueezed attn_mask shape:", attn_mask.shape)
-        # assert attn_mask.size(1) == query.size(-2) and attn_mask.size(2) == key.size(-2), f"Attention mask size must match the sequence lengths of Query and Key. Got attn_mask size: {attn_mask.size()} (B,...,L,S), Query size: {query.size()} (B,...,Hq,L,E), Key size: {key.size()} (B,...,H,S,E)."
+            attn_mask = attn_mask.unsqueeze(1).unsqueeze(1) # B x 1 x 1 x S
+        elif attn_mask.dim() == 3:
+            attn_mask = attn_mask.unsqueeze(1)  # B x 1 x L x S
+        else:
+            assert attn_mask.size(0) == query.size(0) and attn_mask.size(0) == key.size(0), f"Attention mask batch size must match Query and Key batch size. Got attn_mask size: {attn_mask.size()} (B,...), Query size: {query.size()} (B,...), Key size: {key.size()} (B,...)."
+            assert attn_mask.size(-2) == query.size(-2), f"Attention mask size must match the sequence length of Query. Got attn_mask size: {attn_mask.size()} (B,...,L,S), Query size: {query.size()} (B,...,Hq,L,E), Key size: {key.size()} (B,...,H,S,E)."
+            assert attn_mask.size(-1) == key.size(-2), f"Attention mask size must match the batch size and sequence lengths of Query and Key. Got attn_mask size: {attn_mask.size()} (B,...,L,S), Query size: {query.size()} (B,...,Hq,L,E), Key size: {key.size()} (B,...,H,S,E)."
 
     L, S = query.size(-2), key.size(-2)
     scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
 
-    causal_mask = torch.ones(0, dtype=torch.bool, device=device)
+    attn_bias = torch.zeros((1, 1, L, S), device=device)
+
     if is_causal:
-        assert attn_mask is not None, "'attn_mask' cannot be None when 'is_causal' is True."
-        causal_mask = torch.ones(L, S, dtype=torch.bool, device=device).tril(diagonal=0)
+        causal = torch.tril(torch.ones(L, S, device=device))
+        attn_bias = attn_bias.masked_fill(causal == 0, float("-inf"))
+        print("attn_bias", attn_bias)
 
     if attn_mask is not None:
         if attn_mask.dtype == torch.bool:
-            print("causal_mask shape:", causal_mask.shape)
-            print("attn_mask shape:", attn_mask.shape)
-            attn_bias = causal_mask & attn_mask
-            attn_bias.masked_fill_(attn_mask.logical_not(), float("-inf"))
+            attn_bias = attn_bias.masked_fill(~attn_mask, float("-inf"))
         else:
-            causal_mask.masked_fill_(causal_mask.logical_not(), float("-inf"))
-            attn_bias = attn_mask + causal_mask
+            attn_bias = attn_bias + attn_mask
+
+    print("attn_bias after mask", attn_bias)
 
     if enable_gqa:
         if query.size(-3) != key.size(-3):
@@ -125,36 +126,29 @@ def scaled_dot_product_attention(
     attn_weight += attn_bias
     attn_weight = F.softmax(attn_weight, dim=-1)
     attn_weight = F.dropout(attn_weight, dropout_p, training=True)
-    return attn_weight @ value
+    return attn_weight @ value, attn_weight if return_attn_weights else None
 
 class Module(nn.Module):
-    '''class Module'''
     def nb_parameters(self) -> int:
-        '''Give the number of parameters of the module'''
         return sum([np.prod(p.size(), dtype = np.int32) for p in self.parameters()])
 
     def nb_trainable_parameters(self) -> int:
-        '''Give the number of trainable parameters of the module'''
         return sum([np.prod(p.size(), dtype = np.int32) for p in self.parameters() if p.requires_grad])
 
     def nb_non_trainable_parameters(self) -> int:
-        '''Give the number of non-trainable parameters of the module'''
         return sum([np.prod(p.size(), dtype = np.int32) for p in self.parameters() if not p.requires_grad])
 
     def summary(self) -> None:
-        '''Summarize the module'''
         print(f'Number of parameters: {self.nb_parameters():,}')
         print(f'Number of trainable parameters: {self.nb_trainable_parameters():,}')
         print(f'Number of non-trainable parameters: {self.nb_non_trainable_parameters():,}')
 
     def clean_nan(self) -> None:
-        '''Remove NaNs from the module gradients'''
         for p in self.parameters():
             if p.grad is not None:
                 torch.nan_to_num(p.grad, nan = 0, posinf = 1e5, neginf = -1e5, out = p.grad)
 
     def clip_gradient(self, max_norm: float) -> None:
-        '''Clip the module gradients'''
         nn.utils.clip_grad_norm_(self.parameters(), max_norm)
 
     # def init_weights(self) -> None:
@@ -206,13 +200,14 @@ class Linear(nn.Linear, Module):
     
 
 class CausalSelfAttention(Module):
-    def __init__(self, dim_model: int, n_heads: int, d_head: int, norm_before_attn: bool, enable_gqa: bool, layer_idx: int = 0) -> None:
+    def __init__(self, dim_model: int, n_heads: int, d_head: int, norm_before_attn: bool, enable_gqa: bool, dropout: float = .0, layer_idx: int = 0) -> None:
         super().__init__()
         assert dim_model == d_head * n_heads, f"Dimensions are not correct. dim_model must be equal to d_head * n_heads. Got dim_model={dim_model}, d_head={d_head}, n_heads={n_heads}"
         self.layer_idx = layer_idx
         self.n_heads = n_heads
         self.d_head = d_head
         self.norm_before_attn = norm_before_attn
+        self.dropout_rate = dropout
 
         if enable_gqa:
             assert n_heads % 2 == 0, "Number of heads must be even for GQA."
@@ -232,9 +227,9 @@ class CausalSelfAttention(Module):
         self.w_q.init_weights(std)
         self.w_k.init_weights(std)
         self.w_v.init_weights(std)
-        self.w_o.init_weights(methods="zero")
+        self.w_o.init_weights(method="zero")
 
-    def forward(self, x: torch.Tensor, rope_cache=None, mask=None, kv_cache=None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, rope_cache=None, mask=None, kv_cache=None, return_attn_weights: bool = False) -> torch.Tensor:
         n_heads = self.n_heads
         d_head = self.d_head
 
@@ -266,12 +261,14 @@ class CausalSelfAttention(Module):
         # TODO: Support different attention implementations
         # TODO: Use context manager to select attention implementation
         # TODO: Detect context manager and use the corresponding attention implementation
-        output = scaled_dot_product_attention(q, k, v, scale=d_head, attn_mask=mask, is_causal=True)
+        output, attn_weights = scaled_dot_product_attention(
+            q, k, v, attn_mask=mask, dropout_p=self.dropout_rate if self.training else .0, 
+            is_causal=True, return_attn_weights=return_attn_weights
+        )
     
         output = output.transpose(1, 2).contiguous().view(bs, len_x, -1)
         output = self.w_o(output)
-        return output, None
-
+        return output, attn_weights
     
 class FeedForward(Module):
     '''Position-Wise Feed Forward Network'''
@@ -321,7 +318,7 @@ class DecoderLayer(Module):
         self.dropout_rate = dropout
 
     def forward(self, x, mask=None,):
-        h, self_attention = self.attention(x, mask=mask)
+        h, self_attn = self.attention(x, mask=mask)
 
         if self.training:
             h = F.dropout(h, p=self.dropout_rate, training=True)
@@ -329,7 +326,7 @@ class DecoderLayer(Module):
         h = apply_rms_norm(h)
         output = h + self.ffn(h)
 
-        return output, self_attention, None
+        return output, self_attn, None
 
 class MixtureOfExpertsLayer(Module):
     '''Mixture of Experts layer'''
