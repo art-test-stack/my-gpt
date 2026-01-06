@@ -80,18 +80,19 @@ This project has been developed and tested with Python 3.13. To manage dependenc
 1. Clone the repo
    ```sh
    git clone git@github.com:art-test-stack/gpt-lib.git
-    ```
+   ```
 2. Install dependencies
    ```sh
-   uv sync
+    uv sync
    ```
    If running on Linux with CUDA available, you can install the GPU version of PyTorch by running:
-   ```sh
-   uv sync --extra cuda
-  ```
 
-> [!NOTE]  
-> Make sure to adjust the CUDA version in `uv.toml` if needed. This extra is only available for Linux systems with compatible NVIDIA GPUs. It permits using `flash_attention` for faster attention computation.
+    ```sh
+    uv sync --extra cuda
+    ```
+
+    > [!NOTE]  
+    > Make sure to adjust the CUDA version in `uv.toml` if needed. This extra is only available for Linux systems with compatible NVIDIA GPUs. It permits using `flash_attention` for faster attention computation.
 
 
 ### Training a model
