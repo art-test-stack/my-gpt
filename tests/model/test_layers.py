@@ -4,8 +4,9 @@ from gpt_lib.model.layers import (
     precompute_rope, 
     apply_rms_norm,
     scaled_dot_product_attention,
-    SelfAttentionMask,
 )
+from gpt_lib.model.utils import SelfAttentionMask
+from gpt_lib.utils.schemas import GPTConfig
 import torch
 import torch.nn.functional as F
 import time
@@ -13,8 +14,7 @@ import time
 
 @pytest.mark.fast
 def test_rms_norm():
-    x = torch.rand(4, 16, 32) # B, S, E
-    print(x.shape)
+    x = torch.rand(4, 16, 32)
     eps = 1e-8
     t0 = time.time()
     rms_normed_x1 = apply_rms_norm(x, eps=eps, torch_impl=False)
@@ -22,7 +22,6 @@ def test_rms_norm():
     t0 = time.time()
     rms_normed_x2 = F.rms_norm(x, normalized_shape=(x.size(-1),), eps=eps)
     torch_time = time.time() - t0
-    print(f"Custom RMSNorm time: {custom_time:.6f}s, Torch RMSNorm time: {torch_time:.6f}s")
 
     assert torch.allclose(rms_normed_x1, rms_normed_x2), "RMSNorm output does not match expected output"
 
@@ -46,10 +45,11 @@ class TestSelfAttentionMask:
 
         input_ids = torch.arange(1, self.max_context + 1).unsqueeze(0)
         attn_mask = self.mask_generator(input_ids, mask_pad_token=False, to_bool=False, is_causal=True)
-        print("attn_mask", attn_mask)
-        assert attn_mask.shape == (1, 1, self.max_context, self.max_context), "Attention mask has incorrect shape."
-        assert attn_mask.shape == self.expected_mask.shape, "Attention mask shape does not match expected shape."
-        assert torch.equal(attn_mask, self.expected_mask), "Attention mask does not match expected mask for no padding case."
+        
+        assert attn_mask is None, "Attention mask should be None when mask_pad_token is False."
+        # assert attn_mask.shape == (1, 1, self.max_context, self.max_context), "Attention mask has incorrect shape."
+        # assert attn_mask.shape == self.expected_mask.shape, "Attention mask shape does not match expected shape."
+        # assert torch.equal(attn_mask, self.expected_mask), "Attention mask does not match expected mask for no padding case."
 
     @pytest.mark.fast
     def test_self_attention_mask_with_padding(self):
@@ -158,4 +158,4 @@ class TestRoPE:
         x = torch.randn(_bs, n_head, seq_len, d_head) 
         x_rope = apply_rope(x, rope_cache)
         assert x_rope.shape == x.shape, f"Output shape mismatch: {x_rope.shape} != {x.shape}"
-        
+

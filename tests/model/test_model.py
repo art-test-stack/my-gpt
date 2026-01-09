@@ -1,6 +1,8 @@
 import pytest
 import torch
 from gpt_lib.model.model import GPTModel
+from gpt_lib.model.utils import KVState
+
 from gpt_lib.utils.schemas import (
     GPTConfig, 
     ObjectiveConfig, 
@@ -106,3 +108,51 @@ class TestGPTModel:
         assert logits.nansum() != 0, "Logits contain NaN values"
         assert torch.isfinite(logits).all(), "Logits contain non-finite values"
         assert (logits == output.logits).all(), "Logits from forward method do not match logits from __call__ method"
+
+    @pytest.mark.fast
+    def test_kv_state_initialization(self):
+        _bs = 2
+        n_layers = self.config.model.n_layers
+        n_heads = self.config.model.n_heads
+        d_head = self.config.model.d_head
+        max_context = self.config.model.max_context
+        kv_state = KVState(
+            batch_size=_bs,
+            n_layers=n_layers,
+            n_heads=n_heads,
+            d_head=d_head,
+            seq_len=max_context
+        )
+
+        assert kv_state.shape == (n_layers, 2, _bs, n_heads, max_context, d_head), f"KV cache shape mismatch: {(n_layers, 2, _bs, n_heads, max_context, d_head)}"
+
+    @pytest.mark.fast
+    def test_kv_state_update(self):
+        _bs = 2
+        n_layers = self.config.model.n_layers
+        n_heads = self.config.model.n_heads
+        d_head = self.config.model.d_head
+        max_context = self.config.model.max_context
+        kv_state = KVState(
+            batch_size=_bs,
+            n_layers=n_layers,
+            n_heads=n_heads,
+            d_head=d_head,
+            seq_len=max_context
+        )
+
+        for layer_idx in range(n_layers):
+            for pos in range(max_context):
+                k = torch.randn(_bs, n_heads, d_head)
+                v = torch.randn(_bs, n_heads, d_head)
+                kv_state.update(k, v, layer_idx)
+
+        assert kv_state.current_pos == max_context, f"Current position mismatch: {kv_state.current_pos} != {max_context}"
+        for layer_idx in range(n_layers):
+            for pos in range(max_context):
+                for b in range(_bs):
+                    for h in range(n_heads):
+                        expected_k = kv_state.cache[layer_idx, 0, b, h, pos, :]
+                        expected_v = kv_state.cache[layer_idx, 1, b, h, pos, :]
+                        assert torch.allclose(expected_k, kv_state.cache[layer_idx, 0, b, h, pos, :]), "Keys do not match after update"
+                        assert torch.allclose(expected_v, kv_state.cache[layer_idx, 1, b, h, pos, :]), "Values do not match after update"

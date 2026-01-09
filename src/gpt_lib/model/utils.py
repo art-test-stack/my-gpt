@@ -1,6 +1,8 @@
 import torch
 import warnings
 
+from gpt_lib.utils.default import DEVICE
+
 class SelfAttentionMask:
     def __init__(self, pad_idx: int = -100, max_context: int = 512) -> None:
         self.pad_idx = pad_idx
@@ -9,6 +11,9 @@ class SelfAttentionMask:
         self.base_mask.requires_grad = False
     
     def get(self, seq: torch.Tensor, mask_pad_token: bool = True, to_bool: bool = True, is_causal: bool = True) -> torch.Tensor:
+        if not mask_pad_token:
+            return None
+        
         if seq.dim() == 1:
             warnings.warn("Input sequence tensor has dimension 1. Unsqueezing to dimension 2.")
             seq = seq.unsqueeze(0)
@@ -19,8 +24,6 @@ class SelfAttentionMask:
         device = seq.device
         if mask_pad_token:
             pad_mask = (seq != self.pad_idx) # B x S
-        else:
-            pad_mask = torch.ones_like(seq, dtype=torch.bool, device=device)
         
         if is_causal:
             causal_mask = self.base_mask[:S, :S].to(device)
@@ -56,24 +59,32 @@ class RowState:
         self.completed = False
 
 class KVState:
-    def __init__(self, batch_size: int, n_layers: int, n_heads: int, d_head: int, seq_len: int) -> None:
-        self.kv_shape = (n_layers, 2, batch_size, n_heads, seq_len, d_head)
-        self.kv_cache = None
+    def __init__(
+            self, batch_size: int, n_layers: int, n_heads: int, d_head: int, seq_len: int,
+            device: torch.device = DEVICE, dtype: torch.dtype = torch.float32 # TODO: change to flexible dtype
+        ) -> None:
+        self.shape = (n_layers, 2, batch_size, n_heads, seq_len, d_head)
+        self.cache = torch.zeros(self.shape, device=device, dtype=dtype)
         self.current_pos = 0
 
-    def reset(self):
+    def reset(self, *args):
         self.current_pos = 0
+        self = self.__init__(*args)
 
-    def init(self, cache):
-        assert self.kv_cache is None, "Cache is already initialized"
-        assert cache.kv_cache is not None, "Provided cache is empty"
-
-        pass
-
-    def insert(self, layer, k, v):
-        if self.kv_cache is None:
-            self.kv_cache = torch.zeros(self.kv_shape, device=k.device, dtype=k.dtype)
+    def update(self, k: torch.Tensor, v: torch.Tensor, layer_idx: int):
+        if k.device != self.cache.device:
+            self.cache = self.cache.to(self.cache.device)
+        if k.dtype != self.cache.dtype:
+            self.cache = self.cache.to(dtype=k.dtype)
         
-        self.kv_cache[layer, 0, :, :, self.current_pos, :] = k
-        self.kv_cache[layer, 1, :, :, self.current_pos, :] = v
+        self.cache[layer_idx, 0, :, :, self.current_pos, :] = k
+        self.cache[layer_idx, 1, :, :, self.current_pos, :] = v
         self.current_pos += 1
+    
+    def keys(self) -> torch.Tensor:
+        assert self.cache is not None, "KV cache is empty. Cannot retrieve keys."
+        return self.cache[:, 0, :, :, :self.current_pos, :]  # n_layers x B x n_heads x seq_len x d_head
+    
+    def values(self) -> torch.Tensor:
+        assert self.cache is not None, "KV cache is empty. Cannot retrieve values."
+        return self.cache[:, 1, :, :, :self.current_pos, :]  # n_layers x B x n_heads x seq_len x d_head

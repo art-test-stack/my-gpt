@@ -1,16 +1,17 @@
 from gpt_lib.model.layers import (
-    SelfAttentionMask,
-    Module, 
     DecoderLayer, 
     Linear, 
+    Module, 
+    apply_layer_norm,
     apply_rms_norm,
     precompute_rope, 
     precompute_positional_encoding
 )
 from gpt_lib.model.loss import build_objective
-from gpt_lib.model.utils import SelfAttentionMask
+from gpt_lib.model.utils import KVState, SelfAttentionMask
 from gpt_lib.tokenizer.tokenizer import build_tokenizer
 from gpt_lib.utils.schemas import (
+    TOKENIZER_TENSORS,
     get_default_device,
     GenerationConfig,
     GPTConfig, 
@@ -29,33 +30,36 @@ import torch.nn.functional as F
 
 from pathlib import Path
 
+import warnings
+
+
 class Transformer(Module):
     def __init__(
             self,
-            args: TransformerConfig = TransformerConfig(),
+            config: TransformerConfig = TransformerConfig(),
             device: str | torch.device = DEVICE,
             dtype: torch.dtype = torch.float32,
         ) -> None:
         super().__init__()
         if isinstance(device, str):
             device = torch.device(device)
-        self.config = args
-        self.vocab_size = args.vocab_size
-        self.padding_idx = args.pad_id
+        self.config = config
+        self.vocab_size = config.vocab_size
+        self.padding_idx = config.pad_id
         self.device = device
         self.dtype = dtype
         if self.config.positional_encoding == "rope":
             rope_cache = precompute_rope(
-                seq_len=args.max_context,
-                d_head=args.d_head,
+                seq_len=config.max_context,
+                d_head=config.d_head,
                 base=10_000,
                 dtype=dtype,
                 device=device,
             )
-            self.register_buffer("rope_cache", rope_cache, persistent=False)
+            self.register_buffer("pe_cache", rope_cache, persistent=False)
         elif self.config.positional_encoding == "positional":
-            pos_enc = precompute_positional_encoding(args.max_context, args.d_model, dtype=dtype, device=device)
-            self.register_buffer("pos_enc", pos_enc, persistent=False)
+            pos_enc = precompute_positional_encoding(config.max_context, config.d_model, dtype=dtype, device=device)
+            self.register_buffer("pe_cache", pos_enc, persistent=False)
         elif self.config.positional_encoding == "alibi":
             raise NotImplementedError("ALiBi positional encoding is not yet implemented.")
         else:
@@ -63,9 +67,9 @@ class Transformer(Module):
 
         # TODO: Will change to customed embedding
         embedding = nn.Embedding(
-            num_embeddings = args.vocab_size, 
-            embedding_dim = args.d_model, 
-            padding_idx = args.pad_id,
+            num_embeddings = config.vocab_size, 
+            embedding_dim = config.d_model, 
+            padding_idx = config.pad_id,
             sparse=False,
             device=device,
             dtype=dtype
@@ -75,20 +79,29 @@ class Transformer(Module):
             emb=embedding,
             blocks=nn.ModuleList([
                 DecoderLayer(
-                    dim_model=args.d_model,
-                    dim_ffn=args.d_ffn, 
-                    n_heads=args.n_heads, 
-                    d_head=args.d_head, 
-                    dropout=args.dropout,
+                    dim_model=config.d_model,
+                    dim_ffn=config.d_ffn, 
+                    n_heads=config.n_heads, 
+                    d_head=config.d_head, 
+                    dropout=config.dropout,
                     layer_idx=layer_idx,
-                    norm_before_attn=args.norm_before_attn,
-                    enable_gqa=args.enable_gqa,
+                    norm_before_attn=config.norm_before_attn,
+                    enable_gqa=config.enable_gqa,
+                    attn_impl=config.attn_impl,
+                    normalization=config.normalization,
                 ) 
-                for layer_idx in range(args.n_layers)
+                for layer_idx in range(config.n_layers)
             ])
         ))
         
-        self.model_head = Linear(args.d_model, args.vocab_size, bias=False)
+        self.model_head = Linear(config.d_model, config.vocab_size, bias=False)
+
+        if self.config.normalization == "rms":
+            self.norm = apply_rms_norm
+        elif self.config.normalization == "layer":
+            self.norm = apply_layer_norm
+        else:
+            raise ValueError(f"Unknown normalization type: {self.config.normalization}")
                 
     def forward(
             self, 
@@ -108,12 +121,13 @@ class Transformer(Module):
         x = self.layers.emb(input_ids)
 
         if self.config.positional_encoding == "positional_encoding":
-            x = x + self.pos_enc[:x.size(2)]
+            x = x + self.pe_cache[:x.size(2)]
 
-        x = apply_rms_norm(x, eps=1e-8, torch_impl=True)
+        x = self.norm(x, eps=1e-8, torch_impl=True)
         attentions = []
         for i, decoder_layer in enumerate(self.layers.blocks):
-            return_attn = return_attentions and (i == len(self.layers.blocks) - 1)
+            # TODO: not return attn yet
+            return_attn = return_attentions and (i == len(self.layers.blocks) - 1) and False
             x, attn = decoder_layer(
                 x=x, 
                 attn_mask=attn_mask,
@@ -126,7 +140,7 @@ class Transformer(Module):
             if return_attn:
                 attentions.append(attn)
 
-        x = apply_rms_norm(x, eps=1e-8, torch_impl=True)
+        x = self.norm(x, eps=1e-8, torch_impl=True)
 
         if return_hidden_states:
             hidden_states = x
@@ -190,13 +204,19 @@ class GPTModel:
         self.config.model.max_context = new_max_context
         self.attn_mask = self.attn_mask.update_max_context(new_max_context)
 
-    def encode_batch(self, texts: List[str], add_special_tokens: bool = True) -> List[List[int]]:
+    def encode(self, text: str, add_special_tokens: bool = True, return_tensors: TOKENIZER_TENSORS = "pt") -> List[int]:
+        return self.tokenizer.encode(text, add_special_tokens=add_special_tokens, return_tensors=return_tensors)
+    
+    def encode_batch(self, texts: List[str], add_special_tokens: bool = True, return_tensors: TOKENIZER_TENSORS = "pt") -> List[List[int]]:
         # TODO: Change current dummy implementation
-        return self.tokenizer.batch_encode(texts, add_special_tokens=add_special_tokens)
+        return self.tokenizer.batch_encode(texts, add_special_tokens=add_special_tokens, return_tensors=return_tensors)
     
     def decode_batch(self, token_ids: List[List[int]]) -> List[str]:
         # TODO: Change current dummy implementation
         return [self.tokenizer.decode(ids) for ids in token_ids]
+
+    def apply_chat_template(self, messages: List[dict], template: str) -> str:
+        return self.tokenizer.apply_chat_template(messages, template)
 
     def forward(
             self, 
@@ -245,7 +265,10 @@ class GPTModel:
             text: str | List[str],
             ground_truth: str | List[str] | None = None,
             generation_config: GenerationConfig | None = None,
+            assistant_model = None, # TODO: implement assistant model functionality
         ) -> ModelCompletionOutput | Iterator[ModelCompletionOutput]:
+        if assistant_model is not None:
+            warnings.warn("Assistant model functionality is not yet implemented. Assistant model provided is just ignored.", UserWarning)
         if generation_config is None:
             generation_config = GenerationConfig()
         if isinstance(generation_config, dict):
@@ -267,13 +290,21 @@ class GPTModel:
 
         generated = input_ids
 
+        if generation_config.use_cache:
+            kv_cache = KVState(
+                batch_size=input_ids.size(0),
+                n_layers=self.config.model.n_layers,
+                n_heads=self.config.model.n_heads,
+                d_head=self.config.model.d_head,
+                seq_len=generation_config.max_length
+            )
         for _ in range(generation_config.max_length):
             inputs = generated[:, -generation_config.max_length:]
             output: ModelOutput = self(
                 inputs, 
                 label_ids=label_ids,
                 temperature=generation_config.temperature,
-                kv_cache=None,
+                kv_cache=kv_cache if generation_config.use_cache else None,
                 attentions=False
             )
             next_token_logits = output.logits[:, -1, :] / generation_config.temperature
@@ -311,6 +342,10 @@ class GPTModel:
             done=True
         )
         return output
+
+    # TODO
+    def generate_batch(self):
+        pass 
     
     def number_of_parameters(self) -> int:
         try:
@@ -362,7 +397,7 @@ class GPTModel:
         if not ckpt_version.endswith(".pth"):
             ckpt_version += ".pth"
         config = GPTConfig.from_file(model_name=model_name, model_dir=model_dir)
-        model = Transformer(args=config.model, device=config.device, dtype=config.dtype)
+        model = Transformer(config=config.model, device=config.device, dtype=config.dtype)
         tokenizer = build_tokenizer(config.tokenizer)
         model_path = config.dirname / ckpt_version
         if not device:
@@ -379,7 +414,7 @@ class GPTModel:
             config: GPTConfig = GPTConfig()
         ) -> "GPTModel":
         config.to_file(mode="pickle")
-        model = Transformer(args=config.model, device=config.device, dtype=config.dtype)
+        model = Transformer(config=config.model, device=config.device, dtype=config.dtype)
         tokenizer = build_tokenizer(config.tokenizer)
         gpt = cls(model=model, tokenizer=tokenizer, config=config)
         gpt.init_weights()
@@ -391,10 +426,29 @@ class GPTModel:
             yaml_path: str | Path,
         ) -> "GPTModel":
         config = GPTConfig.from_yaml(yaml_path)
-        model = Transformer(args=config.model, device=config.device, dtype=config.dtype)
+        model = Transformer(config=config.model, device=config.device, dtype=config.dtype)
         tokenizer = build_tokenizer(config.tokenizer)
         gpt = cls(model=model, tokenizer=tokenizer, config=config)
         gpt.init_weights()
+        return gpt
+
+    @classmethod
+    def from_huggingface(
+            cls,
+            model_name: str,
+        ) -> "GPTModel":
+        # TODO: Implement conversion from Huggingface models for compatibility
+        raise NotImplementedError("from_huggingface is not yet supported.")
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        # config = GPTConfig.from_huggingface(model_name)
+        hf_model = AutoModelForCausalLM.from_pretrained(model_name).to(config.device)
+        hf_tokenizer = AutoTokenizer.from_pretrained(model_name).to(config.device)
+
+        gpt = cls(
+            model=hf_model,
+            tokenizer=hf_tokenizer,
+            config=GPTConfig()
+        )
         return gpt
     
     def save_checkpoint(

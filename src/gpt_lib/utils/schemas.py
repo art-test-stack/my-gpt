@@ -31,6 +31,18 @@ from gpt_lib.utils.default import (
 )
 from gpt_lib.utils.special_tokens import SpecialTokens
 
+DEVICES = Literal["cpu", "cuda", "mps"]
+TOKENIZER_SOURCES = Literal["tiktoken", "bytelevelbpe", "rustbpe", "huggingface", "dummy"]
+TOKENIZER_TENSORS = Literal["pt", "np", "tf", "jax"]
+NORMALIZATION_TYPES = Literal["rms", "layer"]
+ATTN_IMPL_TYPES = Literal["sdpa", "flash_attention", "impl"]
+POSITIONAL_ENCODING_TYPES = Literal["positional", "rope"]
+TF_TYPES = Literal["dense", "moe"]
+DTYPES = Literal["float32", "float16", "bfloat16"]
+OPTIMIZERS = Literal["adamw", "sgd", "adam", "muon"]
+LOSS_TYPES = Literal["cross_entropy", "kl_divergence"]
+LOSS_REDUCTION_TYPES = Literal["none", "mean", "sum"]
+
 def get_default_device() -> torch.device:
     if torch.cuda.is_available():
         return torch.device("cuda")
@@ -46,7 +58,7 @@ class TokenizerConfig(BaseModel):
     max_context: int | None = MAX_CONTEXT
     pat_str: str | None = PAT_STR_GPT2
     special_tokens: SpecialTokens | None = Field(default_factory=SpecialTokens)
-    source: Literal["tiktoken", "bytelevelbpe", "rustbpe", "huggingface", "dummy"] = "tiktoken"
+    source: TOKENIZER_SOURCES = "tiktoken"
 
     def model_post_init(self, context: Any) -> None:
         self.dirname = self.dirname / self.name
@@ -72,11 +84,13 @@ class TrainingTokenizerConfig(TokenizerConfig):
 class TransformerConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    tf_type: TF_TYPES = "dense"
+
     vocab_size: int = VOCAB_SIZE
     max_context: int = MAX_CONTEXT
     pad_id: int = -100
 
-    positional_encoding: Literal["positional", "rope"] = "rope" # Options: "positional", "rope"
+    positional_encoding: POSITIONAL_ENCODING_TYPES = "rope" # Options: "positional", "rope"
 
     d_model: int = DIM_MODEL
     d_ffn: int = DIM_FFN  # 4 * dim_model
@@ -86,8 +100,9 @@ class TransformerConfig(BaseModel):
 
     dropout: float = DROPOUT
     norm_before_attn: bool = True
+    normalization: NORMALIZATION_TYPES = "rms"  # Options: "rms", "layer"
 
-    attn_type: Literal["sdpa", "flash", "torch"] = "sdpa"  # Options: "sdpa", "flash", "torch"
+    attn_impl: ATTN_IMPL_TYPES = "sdpa"  # Options: "sdpa", "flash_attention", "impl". Not reccomended : "impl"
     enable_gqa: bool = False
 
     softcap: float = 18.0
@@ -99,26 +114,28 @@ class TransformerConfig(BaseModel):
             warnings.warn(f"d_head ({self.d_head}) is not equal to d_model/n_heads ({self.d_model // self.n_heads}). This may lead to unexpected behavior in attention mechanisms.")
         if not self.norm_before_attn:
             warnings.warn("Using post-attention normalization (norm_before_attn=False) may lead to training instability.")
-        if self.attn_type == "flash":
+        if self.attn_impl == "flash_attention":
             try:
                 import flash_attn
             except ImportError:
                 warnings.warn("FlashAttention is not installed. Falling back to standard attention.")
-                self.attn_type = "sdpa"
+                self.attn_impl = "sdpa"
+        if self.attn_impl == "impl":
+            warnings.warn("Using 'impl' attention type is not recommended for production use. Only use for experimentation or retrieve attention weights.")
 
 class DenseTransformerConfig(TransformerConfig):
-    tf_type: Literal["dense"] = "dense"
+    pass
 
 class MoETransformerConfig(TransformerConfig):
-    tf_type: Literal["moe"] = "moe"
+    tf_type: TF_TYPES = "moe"
     nb_experts: int = 16
     expert_capacity_factor: float = 1.0
 
 class ObjectiveConfig(BaseModel):
-    objective_fn: Literal["cross_entropy", "kl_divergence"] = "cross_entropy"
+    objective_fn: LOSS_TYPES = "cross_entropy"
     kwargs: dict = Field(default_factory=dict)
     ignore_index: int = -100
-    reduction: Literal["none", "mean", "sum"] = "none"
+    reduction: LOSS_REDUCTION_TYPES = "none"
 
 class GenerationConfig(BaseModel):
     max_length: int = 256
@@ -129,6 +146,7 @@ class GenerationConfig(BaseModel):
     do_sample: bool = True
     num_return_sequences: int = 1
     stream: bool = False
+    use_cache: bool = True
 
 class GPTConfig(BaseModel):
     """
@@ -156,8 +174,8 @@ class GPTConfig(BaseModel):
     dirname: str | Path = MODELS_FOLDER
     model: TransformerConfig = Field(default_factory=TransformerConfig)
     objective: ObjectiveConfig = Field(default_factory=ObjectiveConfig)
-    dtype: Literal["float32", "float16", "bfloat16"] = "float32"
-    device: Literal["cpu", "cuda", "mps"] = DEVICE
+    dtype: DTYPES = "float32"
+    device: DEVICES = DEVICE
 
     def model_post_init(self, context: Any) -> None:
         if isinstance(self.dirname, str):
@@ -260,7 +278,7 @@ class TrainingConfig(BaseModel):
     min_learning_rate: float = MIN_LEARNING_RATE
     warmup_iters: int = WARMUP_ITERS
 
-    optimizer: Literal["adamw", "sgd", "adam", "muon"] = "adamw"
+    optimizer: OPTIMIZERS = "adamw"
     optimizer_params: dict = Field(default_factory=dict)
 
     validation_step: int = VALIDATION_STEP

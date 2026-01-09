@@ -1,15 +1,23 @@
-from gpt_lib.utils.schemas import TransformerConfig
-from gpt_lib.utils.default import DEVICE, DEVICE_NAME, MAX_CONTEXT
-from gpt_lib.model.utils import SelfAttentionMask
+from gpt_lib.utils.schemas import (
+    ATTN_IMPL_TYPES,
+    NORMALIZATION_TYPES,
+    TransformerConfig
+)
+from gpt_lib.utils.default import DEVICE, DEVICE_NAME
 import math
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from typing import Tuple
 import warnings
-
+try:
+    import flash_attn
+    _flash_attention_installed = True
+except ImportError:
+    flash_attn = None
+    _flash_attention_installed = False
 
 def precompute_rope(seq_len: int, d_head: int, base: int = 10000, dtype: torch.dtype = torch.float32, device: torch.device | None = None) -> torch.Tensor:
     if not device:
@@ -23,7 +31,6 @@ def precompute_rope(seq_len: int, d_head: int, base: int = 10000, dtype: torch.d
     sinusoid_inp = torch.einsum("i,j->ij", pos_seq, inv_freq)
     rope_cache = torch.stack((torch.sin(sinusoid_inp), torch.cos(sinusoid_inp)), dim=-1)
     return rope_cache # seq_len x (d_head/2) x 2
-
 
 def precompute_positional_encoding(n_pos: int, d_model: int, dtype: torch.dtype = torch.float32, device: torch.device | None = None) -> torch.Tensor:
     if not device:
@@ -68,8 +75,14 @@ def apply_rms_norm(x: torch.Tensor, eps: float = 1e-8, torch_impl: bool = True) 
         rms = torch.sqrt(torch.mean(x * x, dim=-1, keepdim=True) + eps)
         return x / rms
 
+def apply_layer_norm(x: torch.Tensor, eps: float = 1e-5, torch_impl: bool = True) -> torch.Tensor:
+    if torch_impl:
+        return torch.layer_norm(x, normalized_shape=(x.size(-1),), eps=eps)
+    else:
+        mean = x.mean(-1, keepdim=True)
+        std = x.std(-1, unbiased=False, keepdim=True)
+        return (x - mean) / (std + eps)
         
-
 def scaled_dot_product_attention(
         query: torch.Tensor, 
         key: torch.Tensor, 
@@ -202,7 +215,11 @@ class Linear(nn.Linear, Module):
     
 
 class CausalSelfAttention(Module):
-    def __init__(self, dim_model: int, n_heads: int, d_head: int, norm_before_attn: bool, enable_gqa: bool, dropout: float = .0, layer_idx: int = 0) -> None:
+    def __init__(self, dim_model: int, n_heads: int, d_head: int, 
+                 norm_before_attn: bool, enable_gqa: bool, dropout: float = .0, 
+                 normalization: NORMALIZATION_TYPES = "rms",
+                 attn_impl: ATTN_IMPL_TYPES = "sdpa", layer_idx: int = 0
+        ) -> None:
         super().__init__()
         assert dim_model == d_head * n_heads, f"Dimensions are not correct. dim_model must be equal to d_head * n_heads. Got dim_model={dim_model}, d_head={d_head}, n_heads={n_heads}"
         self.layer_idx = layer_idx
@@ -211,12 +228,27 @@ class CausalSelfAttention(Module):
         self.norm_before_attn = norm_before_attn
         self.dropout_rate = dropout
 
+        if normalization == "rms":
+            self.norm = apply_rms_norm
+        elif normalization == "layer":
+            self.norm = apply_layer_norm
+        else:
+            raise ValueError(f"Unknown normalization: {normalization}. Supported normalizations are 'rms' and 'layer'.")
+        
         if enable_gqa:
             assert n_heads % 2 == 0, "Number of heads must be even for GQA."
             self.n_heads = n_heads // 2
             d_k = d_head
         else:
             d_k = d_head * n_heads
+        
+        if not _flash_attention_installed and attn_impl == "flash_attention":
+            warnings.warn("FlashAttention is not installed. Falling back to torch implementation.")
+            attn_impl = "sdpa"
+        if _flash_attention_installed and not attn_impl == "flash_attention":
+            warnings.warn("FlashAttention is installed. It is recommended to use 'flash_attention' implementation for better performance.")
+
+        self.attn_impl = attn_impl
 
         self.w_q = Linear(dim_model, d_head * n_heads, bias=False) 
         self.w_k = Linear(dim_model, d_head * n_heads, bias=False) 
@@ -231,7 +263,7 @@ class CausalSelfAttention(Module):
         self.w_v.init_weights(std)
         self.w_o.init_weights(method="zero")
 
-    def forward(self, x: torch.Tensor, rope_cache=None, attn_mask=None, kv_cache=None, return_attn_weights: bool = False) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, rope_cache=None, attn_mask=None, kv_cache=None, return_attn_weights: bool = False) -> Tuple[torch.Tensor, torch.Tensor | None]:
         n_heads = self.n_heads
         d_head = self.d_head
 
@@ -250,9 +282,24 @@ class CausalSelfAttention(Module):
             q = apply_rope(q, rope_cache)
             k = apply_rope(k, rope_cache)
         if self.norm_before_attn:
-            q = apply_rms_norm(q, eps=1e-8, torch_impl=True)
-            k = apply_rms_norm(k, eps=1e-8, torch_impl=True)
-        
+            q = self.norm(q, eps=1e-8, torch_impl=True)
+            k = self.norm(k, eps=1e-8, torch_impl=True)
+
+        if self.attn_impl == "flash_attention" and _flash_attention_installed and not return_attn_weights:
+            try:
+                output = flash_attn.flash_attn_func(
+                    q, k, v,
+                    attn_bias=attn_mask,
+                    causal=True,
+                    dropout_p=self.dropout_rate if self.training else 0.0,
+                    return_attn_weights=return_attn_weights
+                )
+                output = output.reshape(bs, n_heads, len_x, d_head) 
+                return output.transpose(1, 2).contiguous().view(bs, len_x, -1), None
+            except ImportError:
+                warnings.warn("FlashAttention is not installed. Falling back to torch attention.")
+                self.attn_impl = "sdpa"
+            
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)  # b X n_heads X l X d_head
 
         if kv_cache is not None:
@@ -263,10 +310,19 @@ class CausalSelfAttention(Module):
         # TODO: Support different attention implementations
         # TODO: Use context manager to select attention implementation
         # TODO: Detect context manager and use the corresponding attention implementation
-        output, attn_weights = scaled_dot_product_attention(
-            q, k, v, attn_mask=attn_mask, dropout_p=self.dropout_rate if self.training else .0, 
-            is_causal=attn_mask is None, return_attn_weights=return_attn_weights
-        )
+        if self.attn_impl == "sdpa" and not return_attn_weights:
+            output = F.scaled_dot_product_attention(
+                q, k, v, attn_mask=attn_mask, dropout_p=self.dropout_rate if self.training else .0, 
+                is_causal=attn_mask is None
+            )
+            attn_weights = None
+        elif self.attn_impl == "impl" or return_attn_weights:
+            output, attn_weights = scaled_dot_product_attention(
+                q, k, v, attn_mask=attn_mask, dropout_p=self.dropout_rate if self.training else .0, 
+                is_causal=attn_mask is None, return_attn_weights=return_attn_weights
+            )
+        else:
+            raise ValueError(f"Unknown attention implementation: {self.attn_impl}. Supported implementations are 'sdpa', 'flash_attention', and 'impl'.")
     
         output = output.transpose(1, 2).contiguous().view(bs, len_x, -1)
         output = self.w_o(output)
@@ -290,7 +346,7 @@ class FeedForward(Module):
         output = apply_rms_norm(h)
         return output
     
-
+    
 class DecoderLayer(Module):
     '''Decoder layer'''
     def __init__(
@@ -300,9 +356,11 @@ class DecoderLayer(Module):
             n_heads: int, 
             d_head: int, 
             dropout: float,
+            attn_impl: ATTN_IMPL_TYPES = "sdpa",
+            normalization: NORMALIZATION_TYPES = "rms",
             enable_gqa: bool = False,
-            layer_idx: int = 0,
-            norm_before_attn: bool = True
+            norm_before_attn: bool = True,
+            layer_idx: int = 0
         ) -> None:
         super().__init__()
         if not norm_before_attn:
@@ -312,6 +370,8 @@ class DecoderLayer(Module):
             n_heads=n_heads, 
             d_head=d_head, 
             enable_gqa=enable_gqa,
+            normalization=normalization,
+            attn_impl=attn_impl,
             layer_idx=layer_idx, 
             norm_before_attn=norm_before_attn   
         )
@@ -319,13 +379,20 @@ class DecoderLayer(Module):
         self.ffn = FeedForward(d_in=dim_model, d_latent=dim_ffn, dropout=dropout)
         self.dropout_rate = dropout
 
-    def forward(self, x, attn_mask=None, kv_cache=None):
-        h, self_attn = self.attention(x, attn_mask=attn_mask, kv_cache=kv_cache)
+        if normalization == "rms":
+            self.norm = apply_rms_norm
+        elif normalization == "layer":
+            self.norm = apply_layer_norm
+        else:
+            raise ValueError(f"Unknown normalization: {normalization}. Supported normalizations are 'rms' and 'layer'.")
+
+    def forward(self, x, attn_mask=None, kv_cache=None, rope_cache=None) -> Tuple[torch.Tensor, torch.Tensor | None]:
+        h, self_attn = self.attention(x, attn_mask=attn_mask, kv_cache=kv_cache, rope_cache=rope_cache)
 
         if self.training:
             h = F.dropout(h, p=self.dropout_rate, training=True)
         h += x
-        h = apply_rms_norm(h)
+        h = self.norm(h, eps=1e-8, torch_impl=True)
         output = h + self.ffn(h)
 
         return output, self_attn
