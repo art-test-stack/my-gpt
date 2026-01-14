@@ -1,7 +1,7 @@
 import pytest
 import torch
 from gpt_lib.model.model import GPTModel
-from gpt_lib.model.utils import KVState
+from gpt_lib.model.utils import KVCache
 
 from gpt_lib.utils.schemas import (
     GPTConfig, 
@@ -70,6 +70,11 @@ class TestGPTModel:
         assert all(torch.equal(loaded_model.model.state_dict()[k], model.model.state_dict()[k]) for k in model.model.state_dict().keys()), "Loaded model state dict values do not match the original"
 
 
+    def init_model(self):
+        config = self.config
+        model = GPTModel.from_scratch(config)
+        return model
+    
     @pytest.mark.fast
     def test_model_generation(self):
         config = self.config
@@ -110,44 +115,45 @@ class TestGPTModel:
         assert (logits == output.logits).all(), "Logits from forward method do not match logits from __call__ method"
 
     @pytest.mark.fast
-    def test_kv_state_initialization(self):
+    def test_kv_cache_initialization(self):
         _bs = 2
         n_layers = self.config.model.n_layers
         n_heads = self.config.model.n_heads
         d_head = self.config.model.d_head
         max_context = self.config.model.max_context
-        kv_state = KVState(
+        kv_state = KVCache(
             batch_size=_bs,
             n_layers=n_layers,
             n_heads=n_heads,
             d_head=d_head,
-            seq_len=max_context
+            max_seq_len=max_context
         )
 
         assert kv_state.shape == (n_layers, 2, _bs, n_heads, max_context, d_head), f"KV cache shape mismatch: {(n_layers, 2, _bs, n_heads, max_context, d_head)}"
 
     @pytest.mark.fast
-    def test_kv_state_update(self):
+    def test_kv_cache_update(self):
         _bs = 2
         n_layers = self.config.model.n_layers
         n_heads = self.config.model.n_heads
         d_head = self.config.model.d_head
         max_context = self.config.model.max_context
-        kv_state = KVState(
+        kv_state = KVCache(
             batch_size=_bs,
             n_layers=n_layers,
             n_heads=n_heads,
             d_head=d_head,
-            seq_len=max_context
+            max_seq_len=max_context
         )
 
-        for layer_idx in range(n_layers):
-            for pos in range(max_context):
+        for pos in range(max_context):
+            for layer_idx in range(n_layers):
                 k = torch.randn(_bs, n_heads, d_head)
                 v = torch.randn(_bs, n_heads, d_head)
                 kv_state.update(k, v, layer_idx)
+            kv_state.advance()
 
-        assert kv_state.current_pos == max_context, f"Current position mismatch: {kv_state.current_pos} != {max_context}"
+        assert kv_state.cur_pos == max_context, f"Current position mismatch: {kv_state.cur_pos} != {max_context}"
         for layer_idx in range(n_layers):
             for pos in range(max_context):
                 for b in range(_bs):
@@ -156,3 +162,8 @@ class TestGPTModel:
                         expected_v = kv_state.cache[layer_idx, 1, b, h, pos, :]
                         assert torch.allclose(expected_k, kv_state.cache[layer_idx, 0, b, h, pos, :]), "Keys do not match after update"
                         assert torch.allclose(expected_v, kv_state.cache[layer_idx, 1, b, h, pos, :]), "Values do not match after update"
+
+
+    @pytest.mark.fast
+    def test_model_generation_with_cache(self):
+        pass

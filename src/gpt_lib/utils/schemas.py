@@ -1,4 +1,5 @@
 import torch
+import torch.distributed as dist
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Any, List, Callable, Literal
 from torch import nn
@@ -42,6 +43,7 @@ DTYPES = Literal["float32", "float16", "bfloat16"]
 OPTIMIZERS = Literal["adamw", "sgd", "adam", "muon"]
 LOSS_TYPES = Literal["cross_entropy", "kl_divergence"]
 LOSS_REDUCTION_TYPES = Literal["none", "mean", "sum"]
+TP_MODES = Literal["row", "column"]
 
 def get_default_device() -> torch.device:
     if torch.cuda.is_available():
@@ -50,6 +52,40 @@ def get_default_device() -> torch.device:
         return torch.device("mps")
     else:
         return torch.device("cpu")
+
+
+class ParallelismConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool = False
+
+    mode: Literal["single", "dp", "tp"]
+    world_size: int
+    tp_size: int = 1
+    dp_size: int = 1
+
+    tp_size: int = 1
+    tp_rank: int = 0
+    # dp_group: dist.ProcessGroup | None = None
+    # tp_group: dist.ProcessGroup | None = None
+
+    n_heads_q: int | None = None
+    n_heads_kv: int | None = None
+    d_head_q: int | None = None
+
+    tp_mode: TP_MODES = "row"
+
+    @property
+    def local_heads_q(self) -> int:
+        if self.n_heads_q is None:
+            raise ValueError("n_heads_q is not set for TensorParallelConfig")
+        return self.n_heads_q // self.tp_size
+    
+    @property
+    def local_heads_kv(self) -> int:
+        if self.n_heads_kv is None:
+            raise ValueError("n_heads_kv is not set for TensorParallelConfig")
+        return self.n_heads_kv // self.tp_size
 
 class TokenizerConfig(BaseModel):
     name: str = "yc_tok1"

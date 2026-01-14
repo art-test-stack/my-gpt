@@ -58,33 +58,71 @@ class RowState:
         self.python_expr_tokens = []
         self.completed = False
 
-class KVState:
+class KVCache:
     def __init__(
-            self, batch_size: int, n_layers: int, n_heads: int, d_head: int, seq_len: int,
-            device: torch.device = DEVICE, dtype: torch.dtype = torch.float32 # TODO: change to flexible dtype
+            self, 
+            batch_size: int, n_layers: int, n_heads: int, d_head: int, max_seq_len: int,
+            device: torch.device = DEVICE, 
+            dtype: torch.dtype = torch.float32 # TODO: change to flexible dtype
         ) -> None:
-        self.shape = (n_layers, 2, batch_size, n_heads, seq_len, d_head)
-        self.cache = torch.zeros(self.shape, device=device, dtype=dtype)
-        self.current_pos = 0
+        self.shape = (n_layers, 2, batch_size, n_heads, max_seq_len, d_head)
+        self.cache = torch.empty(self.shape, device=device, dtype=dtype)
+        self.cur_pos = 0
 
+    @torch.no_grad()
     def reset(self, *args):
-        self.current_pos = 0
+        self.cur_pos = 0
         self = self.__init__(*args)
 
+    @torch.no_grad()
     def update(self, k: torch.Tensor, v: torch.Tensor, layer_idx: int):
+        assert k.shape == (self.shape[2], self.shape[3], self.shape[5]), f"Keys shape mismatch: {k.shape} != {(self.shape[2], self.shape[3], self.shape[5])}"
+        assert v.shape == (self.shape[2], self.shape[3], self.shape[5]), f"Values shape mismatch: {v.shape} != {(self.shape[2], self.shape[3], self.shape[5])}"
+        assert layer_idx < self.shape[0], f"Layer index out of bounds: {layer_idx} >= {self.shape[0]}"
+        assert self.cur_pos < self.shape[4], f"Current position out of bounds: {self.cur_pos} >= {self.shape[4]}"
+
         if k.device != self.cache.device:
-            self.cache = self.cache.to(self.cache.device)
+            self.cache = self.cache.to(k.device)
         if k.dtype != self.cache.dtype:
             self.cache = self.cache.to(dtype=k.dtype)
         
-        self.cache[layer_idx, 0, :, :, self.current_pos, :] = k
-        self.cache[layer_idx, 1, :, :, self.current_pos, :] = v
-        self.current_pos += 1
+        self.cache[layer_idx, 0, :, :, self.cur_pos, :] = k
+        self.cache[layer_idx, 1, :, :, self.cur_pos, :] = v
+
+        return self.cache[layer_idx, 0, :, :, :self.cur_pos + 1, :], self.cache[layer_idx, 1, :, :, :self.cur_pos + 1, :]
     
+    def advance(self):
+        self.cur_pos += 1
+    
+    @torch.no_grad()
     def keys(self) -> torch.Tensor:
         assert self.cache is not None, "KV cache is empty. Cannot retrieve keys."
-        return self.cache[:, 0, :, :, :self.current_pos, :]  # n_layers x B x n_heads x seq_len x d_head
+        return self.cache[:, 0, :, :, :self.cur_pos, :]  # n_layers x B x n_heads x seq_len x d_head
     
+    @torch.no_grad()
     def values(self) -> torch.Tensor:
         assert self.cache is not None, "KV cache is empty. Cannot retrieve values."
-        return self.cache[:, 1, :, :, :self.current_pos, :]  # n_layers x B x n_heads x seq_len x d_head
+        return self.cache[:, 1, :, :, :self.cur_pos, :]  # n_layers x B x n_heads x seq_len x d_head
+    
+    @torch.no_grad()
+    def get_kv(self, layer_idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        assert layer_idx < self.shape[0], f"Layer index out of bounds: {layer_idx} >= {self.shape[0]}"
+        k = self.cache[layer_idx, 0, :, :, :self.cur_pos, :]  # B x n_heads x seq_len x d_head
+        v = self.cache[layer_idx, 1, :, :, :self.cur_pos, :]  # B x n_heads x seq_len x d_head
+        return k, v
+    
+    @torch.no_grad()
+    def drop_row(self, row_idx: int) -> None:
+        """
+        Drops a specific row from the KV cache, reducing the sequence length by one.
+        Use case: removing outdated entries in streaming scenarios.
+        """
+        self.cache = torch.cat([self.cache[:, :, :row_idx, :, :, :], self.cache[:, :, row_idx+1:, :, :, :]], dim=2)
+        self.shape = (
+            self.shape[0],
+            self.shape[1],
+            self.shape[2] - 1,
+            self.shape[3],
+            self.shape[4],
+            self.shape[5]
+        )

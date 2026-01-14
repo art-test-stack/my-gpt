@@ -8,7 +8,7 @@ from gpt_lib.model.layers import (
     precompute_positional_encoding
 )
 from gpt_lib.model.loss import build_objective
-from gpt_lib.model.utils import KVState, SelfAttentionMask
+from gpt_lib.model.utils import KVCache, SelfAttentionMask
 from gpt_lib.tokenizer.tokenizer import build_tokenizer
 from gpt_lib.utils.schemas import (
     TOKENIZER_TENSORS,
@@ -111,6 +111,8 @@ class Transformer(Module):
             return_attentions: bool = False,
             return_hidden_states: bool = False,
         ):
+        assert (kv_cache is None) or (not self.training), "KV cache can not be used during training."
+
         if input_ids.dtype != torch.long:
             input_ids = input_ids.long()
         if input_ids.dim() == 1:
@@ -132,13 +134,16 @@ class Transformer(Module):
                 x=x, 
                 attn_mask=attn_mask,
                 # TODO: not yet supported
-                # kv_cache=kv_cache, 
+                kv_cache=kv_cache, 
                 # TODO: return_attn in special cases only -> interpretability
                 # return_attentions=return_attn 
             )
             assert x.nansum() != 0, f"NaN detected in layer {i} output."
             if return_attn:
                 attentions.append(attn)
+
+        if kv_cache is not None:
+            kv_cache.advance()
 
         x = self.norm(x, eps=1e-8, torch_impl=True)
 
@@ -228,6 +233,8 @@ class GPTModel:
             temperature: float = 1.0,
             **kwargs
         ) -> ModelOutput:
+        assert (kv_cache is None) or (not self.model.training), "KV cache can not be used during training."
+
         input_ids = input_ids.to(self.config.device)
         labels = labels.to(self.config.device) if labels is not None else None
         attn_mask = self.attn_mask(input_ids)
@@ -291,12 +298,12 @@ class GPTModel:
         generated = input_ids
 
         if generation_config.use_cache:
-            kv_cache = KVState(
+            kv_cache = KVCache(
                 batch_size=input_ids.size(0),
                 n_layers=self.config.model.n_layers,
                 n_heads=self.config.model.n_heads,
                 d_head=self.config.model.d_head,
-                seq_len=generation_config.max_length
+                max_seq_len=generation_config.max_length
             )
         for _ in range(generation_config.max_length):
             inputs = generated[:, -generation_config.max_length:]
