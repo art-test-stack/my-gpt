@@ -1,8 +1,7 @@
 from gpt_lib.utils.schemas import (
-    ATTN_IMPL_TYPES,
-    NORMALIZATION_TYPES,
     TransformerConfig
 )
+from gpt_lib.utils.types import AttnImplTypes, NormalizationTypes
 from gpt_lib.utils.default import DEVICE, DEVICE_NAME
 import math
 import numpy as np
@@ -307,8 +306,8 @@ def build_qkv_projection(d_model: int, n_heads_q: int, n_heads_kv: int, d_head: 
 class CausalSelfAttention(Module):
     def __init__(self, dim_model: int, n_heads: int, d_head: int, 
                  norm_before_attn: bool, enable_gqa: bool, dropout: float = .0, 
-                 normalization: NORMALIZATION_TYPES = "rms",
-                 attn_impl: ATTN_IMPL_TYPES = "sdpa", layer_idx: int = 0
+                 normalization: NormalizationTypes = "rms",
+                 attn_impl: AttnImplTypes = "sdpa", layer_idx: int = 0
         ) -> None:
         super().__init__()
         assert dim_model == d_head * n_heads, f"Dimensions are not correct. dim_model must be equal to d_head * n_heads. Got dim_model={dim_model}, d_head={d_head}, n_heads={n_heads}"
@@ -474,8 +473,8 @@ class DecoderLayer(Module):
             n_heads: int, 
             d_head: int, 
             dropout: float,
-            attn_impl: ATTN_IMPL_TYPES = "sdpa",
-            normalization: NORMALIZATION_TYPES = "rms",
+            attn_impl: AttnImplTypes = "sdpa",
+            normalization: NormalizationTypes = "rms",
             enable_gqa: bool = False,
             norm_before_attn: bool = True,
             layer_idx: int = 0
