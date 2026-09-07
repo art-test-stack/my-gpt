@@ -7,7 +7,7 @@ It is mainly adapted from the sources given below, but the overall structure is 
 
 ## Usage
 
-Use `gpt-lab train base auto --help` or `gpt-lab train base resume --help`.
+Use `gpt-lab train base auto --help`, `compatible --help`, or `resume --help`.
 Distributed entry point: `torchrun -m gpt_lab.cli train base ...`.
 See docs/cli.md for full examples.
 
@@ -24,6 +24,8 @@ Please cite this work if the code is helpful to you.
 """
 
 from argparse import Namespace
+import json
+from pathlib import Path
 
 
 def run(args: Namespace) -> None:
@@ -78,9 +80,22 @@ def run(args: Namespace) -> None:
         # GET MODEL CONFIG
         # ------------------------------------------------------------------------------
 
+        compatibility = None
+        raw_hf_config = None
         if args.model_init == "auto":
             meta_config = build_auto_config(args, device, dist_info)
             base_training_config = meta_config.base_train
+
+        elif args.model_init == "compatible":
+            meta_config, compatibility, raw_hf_config = build_compatible_config(args, device, dist_info)
+            base_training_config = meta_config.base_train
+            from gpt_lab.model.hf_compat import print_report
+            parameter_count = build_meta_model(meta_config.model_cfg).n_params()
+            if is_master_process:
+                log0(print_report(compatibility, parameter_count), logger=logger,
+                     level="warning" if compatibility.status == "partial" else "info")
+            if args.dry_run:
+                return
 
         elif is_resumed:
             # load config from checkpoint and override with CLI args if specified
@@ -104,7 +119,7 @@ def run(args: Namespace) -> None:
         )
         model = build_meta_model(meta_config.model_cfg)
         tokenizer = Tokenizer.from_config(meta_config.tokenizer_cfg)
-        if args.model_init == "auto":
+        if args.model_init in {"auto", "compatible"}:
             model = model.to_empty(device=device)
             model.init_weights()
             broadcast_model(model, dist_info)
@@ -157,6 +172,8 @@ def run(args: Namespace) -> None:
         else:
             trainer_config = build_trainer_config(args, dist_info, base_training_config)
             ckpt_manager.save_training_config(trainer_config)
+            if args.model_init == "compatible" and is_master_process:
+                save_compatibility_artifacts(ckpt_manager.source_dir.parent, raw_hf_config, compatibility, args.compatibility_report)
         print0_dict("Trainer config", trainer_config.model_dump())
 
         # ------------------------------------------------------------------------------
@@ -255,6 +272,69 @@ def build_auto_config(args: Namespace, device, dist_info: dict):
         device_batch_size=args.device_batch_size,
         total_batch_size=args.total_batch_size,
     ).generate_gpt_config(device)
+
+
+def build_compatible_config(args: Namespace, device, dist_info: dict):
+    """Resolve a native meta configuration without constructing an HF model."""
+    from gpt_lab.model.checkpoint import build_meta_model, make_default_run_name
+    from gpt_lab.model.hf_compat import load_hf_config, map_hf_config
+    from gpt_lab.tokenizer import Tokenizer
+    from gpt_lab.utils.schemas import MetaConfig
+
+    raw, resolved_revision = load_hf_config(
+        args.hf_config, revision=args.hf_revision, local_files_only=args.local_files_only
+    )
+    model_cfg, report = map_hf_config(
+        raw, source=args.hf_config, requested_revision=args.hf_revision,
+        resolved_revision=resolved_revision,
+    )
+    if args.strict_compatibility and report.todos:
+        raise ValueError(
+            "Strict compatibility rejected architecture TODOs: "
+            + ", ".join(item.field for item in report.todos)
+        )
+    tokenizer = Tokenizer.from_pretrained(args.tokenizer_model, source=args.tokenizer_source)
+    if tokenizer.vocab_size != model_cfg.vocab_size:
+        raise ValueError(
+            f"Tokenizer {args.tokenizer_model!r} vocabulary ({tokenizer.vocab_size}) does not match "
+            f"the Hugging Face configuration vocabulary ({model_cfg.vocab_size}). Resizing is not supported; choose a matching tokenizer."
+        )
+    run_name = args.run_name or make_default_run_name(model_cfg.n_layers, args.model_name, dist_info)
+    model = build_meta_model(model_cfg)
+    total_batch_size = args.total_batch_size
+    if total_batch_size == -1:
+        total_batch_size = args.device_batch_size * model_cfg.max_context * dist_info["WORLD_SIZE"] * args.n_acc_steps
+    if total_batch_size <= 0 or args.n_acc_steps <= 0:
+        raise ValueError("total batch size and n-acc-steps must be positive")
+    n_steps = args.num_steps
+    if n_steps <= 0:
+        n_steps = max(1, int(args.target_param_data_ratio * model.n_scaling_params() // total_batch_size))
+    base_train = dict(
+        n_steps=n_steps, n_acc_steps=args.n_acc_steps, total_batch_size=total_batch_size,
+        device_batch_size=args.device_batch_size, batch_lr_scale=1.0, weight_decay_scale=1.0,
+        target_param_data_ratio=args.target_param_data_ratio, target_tokens=n_steps * total_batch_size,
+        n_total_tokens=n_steps * total_batch_size, n_flops_per_token=model.estimate_flops(),
+    )
+    meta = MetaConfig(
+        name=args.model_name, run_name=run_name,
+        dirname=Path(args.model_dir) / args.model_name / run_name,
+        model_cfg=model_cfg, tokenizer_cfg=tokenizer.config, base_train=base_train,
+        autosave=dist_info.get("RANK", 0) == 0,
+    )
+    del model
+    return meta, report, raw
+
+
+def save_compatibility_artifacts(run_dir, raw_hf_config, report, destination=None):
+    """Persist provenance beside meta.json; resume uses the saved native config."""
+    run_dir = Path(run_dir)
+    (run_dir / "hf_config.json").write_text(json.dumps(raw_hf_config, indent=2, sort_keys=True))
+    payload = report.as_dict()
+    (run_dir / "compatibility_report.json").write_text(json.dumps(payload, indent=2, sort_keys=True))
+    if destination:
+        path = Path(destination).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True))
 
 
 def build_trainer_config(args: Namespace, dist_info: dict, base_training_config: dict):
