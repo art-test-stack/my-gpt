@@ -346,7 +346,48 @@ class TransformerConfig(BaseModel):
             window_sizes.append(window_table[char])
         window_sizes.append((-1, 0))  # Final layer always long
         return window_sizes
-    
+
+
+class CompatibilityItem(BaseModel):
+    """One source configuration field's compatibility classification."""
+
+    field: str
+    value: Any
+    reason: Optional[str] = None
+    component: Optional[str] = None
+    severity: Optional[str] = None
+
+
+class CompatibilityReport(BaseModel):
+    """Serializable provenance for a native model resolved from an HF config."""
+
+    source: str
+    requested_revision: Optional[str] = None
+    resolved_revision: Optional[str] = None
+    model_type: str
+    adapter: str
+    status: Literal["exact", "partial", "incompatible"] = "exact"
+    mapped: List[CompatibilityItem] = Field(default_factory=list)
+    derived: List[CompatibilityItem] = Field(default_factory=list)
+    ignored: List[CompatibilityItem] = Field(default_factory=list)
+    overrides: List[CompatibilityItem] = Field(default_factory=list)
+    todos: List[CompatibilityItem] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    resolved_config: Optional[Dict[str, Any]] = None
+
+    def add(self, category: Literal["mapped", "derived", "ignored", "overrides", "todos"], field: str, value: Any, **kwargs: Any) -> None:
+        getattr(self, category).append(CompatibilityItem(field=field, value=value, **kwargs))
+
+    def finalise(self, config: TransformerConfig) -> None:
+        self.resolved_config = config.model_dump(mode="json")
+        if self.todos:
+            self.status = "partial"
+
+    def as_dict(self) -> Dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload["resolved_gpt_lab_model_config"] = payload.pop("resolved_config")
+        return payload
+
 class DenseTransformerConfig(TransformerConfig):
     pass
 
