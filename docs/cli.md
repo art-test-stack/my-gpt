@@ -10,7 +10,7 @@ configuration files; pass absolute paths when running elsewhere.
 | Purpose | Commands |
 | --- | --- |
 | Tokenization | `gpt-lab tokenizer train` |
-| Training | `gpt-lab train base auto`, `gpt-lab train base resume` |
+| Training | `gpt-lab train base auto`, `gpt-lab train base compatible`, `gpt-lab train base resume` |
 | Benchmarking | `gpt-lab benchmark dataloaders` |
 | Experiments | `gpt-lab experiment tokenizer-scaling` |
 | Data preparation | `gpt-lab data reshard` |
@@ -28,6 +28,7 @@ gpt-lab tokenizer train --help
 gpt-lab benchmark dataloaders --help
 gpt-lab experiment tokenizer-scaling --help
 gpt-lab train base auto --help
+gpt-lab train base compatible --help
 gpt-lab train base resume --help
 ```
 
@@ -108,6 +109,25 @@ logging. Tokenizer resolution and evaluation can access external data when run.
 The old `--fp8`, `--truncate-tokenizer`, and `--ds-config-path` arguments were not
 wired into this training script; they remain parseable and explicitly documented
 as unused. Dataset selection still uses `--ds-name` and prepared local shards.
+
+### Hugging Face configuration compatibility
+
+`compatible` reads a local `config.json` or a Hugging Face repository's
+**configuration only**, maps it to the native model, and initializes fresh gpt-lab
+weights. It never calls a pretrained-model loader. GPT-2 is the first adapter:
+
+```bash
+gpt-lab train base compatible --hf-config gpt2 --tokenizer-model gpt2 --board dummy
+gpt-lab train base compatible --hf-config ./gpt2-config/config.json --tokenizer-model gpt2 --dry-run
+gpt-lab train base compatible --hf-config gpt2 --strict-compatibility
+```
+
+The report calls GPT-2 **partial**, not exact: learned absolute positions, LayerNorm,
+GELU, biases, dropout, attention-scaling variants, and initialization details are
+explicit TODOs against the corresponding native components. It saves
+`hf_config.json` and `compatibility_report.json` beside `meta.json`; resume uses the
+saved native configuration and does not contact Hugging Face. The tokenizer vocabulary
+must match exactly—resizing is intentionally unsupported.
 
 Resume with the latest checkpoint in a specific run:
 
