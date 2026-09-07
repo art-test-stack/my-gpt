@@ -6,61 +6,10 @@ loading APIs: gpt-lab always creates fresh ``DenseTransformer`` weights.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from gpt_lab.utils.schemas import TransformerConfig
-
-
-@dataclass
-class CompatibilityItem:
-    field: str
-    value: Any
-    reason: str | None = None
-    component: str | None = None
-    severity: str | None = None
-
-    def as_dict(self) -> dict[str, Any]:
-        return {key: value for key, value in vars(self).items() if value is not None}
-
-
-@dataclass
-class CompatibilityReport:
-    source: str
-    requested_revision: str | None
-    resolved_revision: str | None
-    model_type: str
-    adapter: str
-    status: str = "exact"
-    mapped: list[CompatibilityItem] = field(default_factory=list)
-    derived: list[CompatibilityItem] = field(default_factory=list)
-    ignored: list[CompatibilityItem] = field(default_factory=list)
-    overrides: list[CompatibilityItem] = field(default_factory=list)
-    todos: list[CompatibilityItem] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-    resolved_config: dict[str, Any] | None = None
-
-    def add(self, category: str, field: str, value: Any, **kwargs: Any) -> None:
-        getattr(self, category).append(CompatibilityItem(field, value, **kwargs))
-
-    def finalise(self, config: TransformerConfig) -> None:
-        self.resolved_config = config.model_dump(mode="json")
-        if self.todos:
-            self.status = "partial"
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "source": self.source, "requested_revision": self.requested_revision,
-            "resolved_revision": self.resolved_revision, "model_type": self.model_type,
-            "adapter": self.adapter, "status": self.status,
-            "mapped": [item.as_dict() for item in self.mapped],
-            "derived": [item.as_dict() for item in self.derived],
-            "ignored": [item.as_dict() for item in self.ignored],
-            "overrides": [item.as_dict() for item in self.overrides],
-            "todos": [item.as_dict() for item in self.todos],
-            "warnings": self.warnings, "resolved_gpt_lab_model_config": self.resolved_config,
-        }
+from gpt_lab.utils.schemas import CompatibilityReport, TransformerConfig
 
 
 def _value(raw: Mapping[str, Any], *names: str, default: Any = None) -> tuple[str, Any]:
@@ -134,7 +83,13 @@ def map_hf_config(raw: Mapping[str, Any], *, source: str = "<memory>", requested
     model_type = raw.get("model_type")
     if not isinstance(model_type, str) or model_type not in ADAPTERS:
         raise ValueError(f"No gpt-lab compatibility adapter for Hugging Face model_type {model_type!r}")
-    report = CompatibilityReport(source, requested_revision, resolved_revision, model_type, f"{model_type} adapter")
+    report = CompatibilityReport(
+        source=source,
+        requested_revision=requested_revision,
+        resolved_revision=resolved_revision,
+        model_type=model_type,
+        adapter=f"{model_type} adapter",
+    )
     return ADAPTERS[model_type](raw, report), report
 
 
