@@ -65,6 +65,29 @@ def add_resume_arguments(parser: ArgumentParser) -> None:
     parser.add_argument('--checkpoint-dir', type=str, default=None, help='Explicit run directory (with meta.json), base directory, or checkpoint_step_N directory. Overrides model-dir/model-name/run-name; a step directory selects that exact step.')
 
 
+def add_compatible_arguments(parser: ArgumentParser) -> None:
+    parser.add_argument('--hf-config', required=True, help='Hugging Face repository ID or local config.json; only this JSON is fetched.')
+    parser.add_argument('--hf-revision', default=None, help='Optional revision for a Hugging Face configuration repository.')
+    parser.add_argument('--local-files-only', action='store_true', help='Resolve a remote configuration from the local Hugging Face cache only.')
+    parser.add_argument('--strict-compatibility', action='store_true', help='Fail before model creation if architecture-relevant compatibility TODOs remain.')
+    parser.add_argument('--compatibility-report', default=None, help='Optional path for the full JSON compatibility report.')
+    parser.add_argument('--dry-run', action='store_true', help='Resolve and validate configuration, print its report and parameter count, then exit.')
+    parser.add_argument('--tokenizer-model', default='gpt2', help='Existing gpt-lab tokenizer to use; its vocabulary must match the source model.')
+    parser.add_argument('--tokenizer-source', default='tiktoken', choices=('tiktoken', 'huggingface', 'local'), help='Tokenizer source for --tokenizer-model.')
+    parser.add_argument('--num-steps', type=int, default=-1, help='Training steps; -1 derives the horizon from --target-param-data-ratio.')
+    parser.add_argument('--target-param-data-ratio', type=float, default=11.0, help='Used to derive a horizon when --num-steps is not positive.')
+    parser.add_argument('--n-acc-steps', type=int, default=1, help='Gradient accumulation steps for compatible training.')
+    parser.add_argument('--total-batch-size', type=int, default=-1, help='Global tokens per optimizer step; -1 derives it from device batch size.')
+    parser.add_argument('--lr-embeddings', type=float, default=.3)
+    parser.add_argument('--lr-transformer', type=float, default=.02)
+    parser.add_argument('--lr-head', type=float, default=.008)
+    parser.add_argument('--lr-residuals', type=float, default=.5)
+    parser.add_argument('--warmup-steps', type=int, default=40)
+    parser.add_argument('--warmdown-ratio', type=float, default=.65)
+    parser.add_argument('--weight-decay', type=float, default=.28)
+    parser.add_argument('--final-lr-frac', type=float, default=.05)
+
+
 def register(stages) -> None:
     parser = stages.add_parser(
         'base', help='Pretrain a base model or resume a checkpoint.',
@@ -77,6 +100,11 @@ def register(stages) -> None:
     add_common_arguments(auto)
     add_auto_arguments(auto)
     auto.set_defaults(_handler='gpt_lab.cli.commands.base:run_auto')
+    compatible = modes.add_parser('compatible', help='Train a native model resolved from a Hugging Face configuration.',
+                                  description='Reads configuration only; constructs fresh gpt-lab weights and reports unsupported architecture semantics.')
+    add_common_arguments(compatible)
+    add_compatible_arguments(compatible)
+    compatible.set_defaults(_handler='gpt_lab.cli.commands.base:run_compatible')
     resume = modes.add_parser('resume', help='Restore a run, optimizer, and dataloader checkpoint.',
                               description='Resume expensive training. The latest run and latest checkpoint are discovered automatically. Saved model/trainer configuration takes precedence over common training defaults.')
     add_common_arguments(resume)
@@ -121,5 +149,10 @@ def run_auto(args: Namespace) -> None:
 
 
 def run_resume(args: Namespace) -> None:
+    from gpt_lab.workflows.train_base import run
+    run(args)
+
+
+def run_compatible(args: Namespace) -> None:
     from gpt_lab.workflows.train_base import run
     run(args)
