@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 LEAVES = [
     ('tokenizer train', 'tokenizer', 'run', 'train_tokenizer', 'run'),
     ('train base auto', 'base', 'run_auto', 'train_base', 'run'),
+    ('train base compatible --hf-config config.json', 'base', 'run_compatible', 'train_base', 'run'),
     ('train base resume', 'base', 'run_resume', 'train_base', 'run'),
     ('benchmark dataloaders', 'benchmark', 'run', 'dataloaders', 'run'),
     ('experiment tokenizer-scaling', 'experiment', 'run', 'tokenizer_scaling', 'run'),
@@ -63,7 +64,7 @@ def test_dispatch_only_selected_handler(prefix, module, handler, workflow, targe
     args = run.call_args.args[0]
     assert isinstance(args, argparse.Namespace)
     if prefix.startswith('train base'):
-        assert args.model_init == prefix.split()[-1]
+        assert args.model_init == prefix.split()[2]
 
 
 @pytest.mark.parametrize('prefix,module,handler,workflow,target', [row for row in LEAVES if row[3]])
@@ -95,6 +96,16 @@ def test_auto_parsing_and_deprecated_alias():
     args = build_parser().parse_args('train base auto --model-name test --depth 4 --d-kv-head 2 --train-tokenizer --vocab-size 512 --num-steps 10 --device cpu --board dummy --window-size 128'.split())
     assert (args.depth, args.n_kv_heads, args.vocab_size, args.num_steps) == (4, 2, 512, 10)
     assert args.train_tokenizer and args.window_size == '128'
+
+
+def test_compatible_parsing_and_help(capsys):
+    args = build_parser().parse_args('train base compatible --hf-config local/config.json --strict-compatibility --dry-run'.split())
+    assert args.model_init == 'compatible'
+    assert args.hf_config == 'local/config.json' and args.strict_compatibility and args.dry_run
+    with pytest.raises(SystemExit) as error:
+        main('train base compatible --help'.split())
+    assert error.value.code == 0
+    assert '--hf-config' in capsys.readouterr().out
 
 
 @pytest.mark.parametrize('value,expected', [('120', 120), ('0', 0), ('-1', -1), ('-2', -2), ('latest', 'latest'), ('best', 'best')])
@@ -165,7 +176,7 @@ for name in ['__main__', 'main', 'parser', 'options', 'commands.base', 'commands
 argparse.ArgumentParser.parse_args = original_parse
 for name in ['mkdir', 'stat', 'lstat', 'resolve', 'open']:
     setattr(pathlib.Path, name, forbidden)
-for prefix in ['', 'tokenizer', 'train base auto', 'train base resume', 'benchmark dataloaders', 'experiment tokenizer-scaling', 'data reshard', 'cache clear', 'chat console', 'chat app']:
+for prefix in ['', 'tokenizer', 'train base auto', 'train base compatible --hf-config config.json', 'train base resume', 'benchmark dataloaders', 'experiment tokenizer-scaling', 'data reshard', 'cache clear', 'chat console', 'chat app']:
     try:
         gpt_lab.cli.main(prefix.split() + ['--help'])
     except SystemExit as exc:
