@@ -1,8 +1,10 @@
 import json
 
 import pytest
+from pydantic import BaseModel
 
 from gpt_lab.model.hf_compat import load_hf_config, map_hf_config
+from gpt_lab.utils.schemas import CompatibilityItem, CompatibilityReport
 
 
 def tiny_gpt2(**updates):
@@ -40,6 +42,9 @@ def test_invalid_gpt2_dimensions_fail_usefully():
 
 def test_compatibility_payload_is_structured():
     _, report = map_hf_config(tiny_gpt2())
+    assert isinstance(report, CompatibilityReport)
+    assert isinstance(report.mapped[0], CompatibilityItem)
+    assert isinstance(report, BaseModel)
     payload = report.as_dict()
     assert payload["resolved_gpt_lab_model_config"]["d_head"] == 8
     assert {"mapped", "derived", "ignored", "todos", "warnings"} <= payload.keys()
